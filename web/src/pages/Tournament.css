@@ -2156,6 +2156,197 @@
   color: rgba(255, 255, 255, 0.8);
 }
 
+.broadcast-overlay-preview-panel {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(5, 10, 18, 0.9), rgba(9, 13, 22, 0.7));
+  padding: 10px;
+}
+
+.broadcast-overlay-preview-lower-third {
+  position: relative;
+  border-radius: 14px;
+  border: 1px solid rgba(140, 170, 255, 0.5);
+  background: linear-gradient(135deg, rgba(9, 16, 28, 0.9), rgba(18, 29, 46, 0.88));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 0 18px rgba(116, 217, 255, 0.24),
+    0 10px 30px rgba(15, 23, 42, 0.4);
+  padding: 10px 12px 12px;
+}
+
+.overlay-label {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #dbeafe;
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 5px 9px;
+  margin-bottom: 8px;
+}
+
+.overlay-lower-third-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.overlay-side {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+  min-height: 70px;
+  backdrop-filter: blur(4px);
+}
+
+.overlay-side span {
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.overlay-side strong {
+  font-size: 1.04rem;
+  line-height: 1.2;
+  letter-spacing: -0.04em;
+  text-shadow: 0 0 14px rgba(255, 255, 255, 0.42);
+}
+
+.overlay-side--red {
+  background: linear-gradient(135deg, rgba(255, 77, 89, 0.9), rgba(127, 29, 29, 0.82));
+  border-color: rgba(255, 148, 153, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 0 16px rgba(248, 113, 113, 0.22);
+}
+
+.overlay-side--blue {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.92), rgba(14, 48, 120, 0.82));
+  border-color: rgba(147, 197, 253, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 0 16px rgba(96, 165, 250, 0.22);
+}
+
+.overlay-divider {
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #dbeafe;
+  text-shadow: 0 0 10px rgba(116, 217, 255, 0.8);
+}
+
+.broadcast-timing-slot-list {
+  display: grid;
+  gap: 6px;
+}
+
+.broadcast-timing-slot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px 10px;
+}
+
+.broadcast-timing-slot div {
+  display: grid;
+  gap: 2px;
+}
+
+.broadcast-timing-slot strong {
+  font-size: 0.84rem;
+}
+
+.broadcast-timing-slot-kind {
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.broadcast-timing-slot--leaderboard {
+  border-color: rgba(96, 165, 250, 0.32);
+}
+
+.broadcast-timing-slot--race {
+  border-color: rgba(248, 113, 113, 0.32);
+}
+
+.broadcast-timing-slot--sponsor {
+  border-color: rgba(168, 85, 247, 0.3);
+}
+
+.broadcast-timing-slot-editor {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(8, 13, 19, 0.9);
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.broadcast-timing-slot-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.broadcast-timing-slot-editor-head span {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.76rem;
+}
+
+.broadcast-timing-slot-editor-list {
+  display: grid;
+  gap: 8px;
+}
+
+.broadcast-timing-slot-editor-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 70px;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px;
+}
+
+.broadcast-timing-slot-editor-row div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.broadcast-timing-slot-editor-row strong {
+  font-size: 0.82rem;
+}
+
+.broadcast-timing-slot-editor-row span {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.broadcast-timing-slot-editor-row input[type='number'] {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 12, 17, 0.9);
+  color: white;
+  padding: 6px 8px;
+}
+
 .broadcast-checklist {
   margin: 0;
   padding-left: 18px;

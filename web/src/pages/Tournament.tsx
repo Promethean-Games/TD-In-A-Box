@@ -217,7 +217,15 @@ export default function Tournament() {
   const totalTables = Math.max(1, Math.floor(Number(currentTournament?.tableCount || 1)));
   const tableOptions = Array.from({ length: totalTables }, (_, index) => index + 1);
   const connectedCameraIds = broadcastConfig.connectedCameraIds ?? [];
-  const connectedFeedCount = connectedCameraIds.length;
+  const mappedConnectedCameraIds = useMemo(
+    () =>
+      connectedCameraIds.filter((cameraId) => {
+        const mappedTable = broadcastConfig.cameraTableMap?.[cameraId] ?? 0;
+        return Number(mappedTable) > 0;
+      }),
+    [broadcastConfig.cameraTableMap, connectedCameraIds]
+  );
+  const connectedFeedCount = mappedConnectedCameraIds.length;
   const usbAndCaptureSources = broadcastConfig.cameraList.filter((camera) => camera.type === 'USB' || camera.type === 'OBS');
   const canAccessBracketTab = true;
   const tableLimit = totalTables;
@@ -417,6 +425,52 @@ export default function Tournament() {
       activeCameraStreamRef.current = null;
     };
   }, []);
+
+  const previewSelectedSource = useCallback(async () => {
+    if (cameraInputMode === 'QR' || !selectedCameraSource) return;
+    if (cameraConnectionState === 'CONNECTED' && activeCameraStreamRef.current && previewVideoRef.current) return;
+
+    if (cameraInputMode === 'NETWORK' && selectedCameraSource.streamUrl) {
+      if (previewVideoRef.current) {
+        previewVideoRef.current.src = selectedCameraSource.streamUrl;
+        previewVideoRef.current.muted = true;
+        previewVideoRef.current.load();
+        await previewVideoRef.current.play().catch(() => undefined);
+      }
+      return;
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: selectedCameraSource.id ? { exact: selectedCameraSource.id } : undefined,
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 60 }
+        },
+        audio: false
+      });
+      activeCameraStreamRef.current = stream;
+      if (previewVideoRef.current) {
+        previewVideoRef.current.srcObject = stream;
+        previewVideoRef.current.muted = true;
+        await previewVideoRef.current.play().catch(() => undefined);
+      }
+    } catch {
+      if (previewVideoRef.current) {
+        previewVideoRef.current.srcObject = null;
+      }
+    }
+  }, [cameraConnectionState, cameraInputMode, selectedCameraSource]);
+
+  useEffect(() => {
+    if (workflowTab !== 'BROADCAST' || !selectedCameraSource) return;
+    if (cameraConnectionState === 'CONNECTED') return;
+    void previewSelectedSource();
+  }, [cameraConnectionState, previewSelectedSource, selectedCameraSource, workflowTab]);
+
   const editingSponsor = broadcastConfig.sponsorCards.find((sponsor) => sponsor.id === editingSponsorId) ?? null;
   const marketingWordCount = (editingSponsor?.marketingBlip || '').trim().split(/\s+/).filter(Boolean).length;
   const selectedBroadcastChannel =
@@ -450,7 +504,10 @@ export default function Tournament() {
     selectedBroadcastChannel &&
       allowedBroadcastChannels.some((channel) => channel.id === selectedBroadcastChannel.id)
   );
-  const hasConnectedCameraFeed = cameraConnectionState === 'CONNECTED' && Boolean(selectedCameraSource?.id);
+  const hasConnectedCameraFeed =
+    cameraConnectionState === 'CONNECTED' &&
+    Boolean(selectedCameraSource?.id) &&
+    Boolean(selectedCameraSource?.id && (broadcastConfig.cameraTableMap?.[selectedCameraSource.id] ?? 0) > 0);
   const hasMappedCameraTable = Boolean(selectedCameraSource?.id && (broadcastConfig.cameraTableMap?.[selectedCameraSource.id] ?? 0) > 0);
   const allSponsorCardsReady = broadcastConfig.sponsorCards.every(
     (sponsor) => sponsor.name.trim().length > 0 && sponsor.marketingBlip.trim().length > 0
@@ -471,6 +528,17 @@ export default function Tournament() {
       return found ? { id: found.id, name: found.name, type: found.type } : null;
     })
     .filter((camera): camera is { id: string; name: string; type: 'WIFI' | 'USB' | 'OBS' | 'NETWORK' } => Boolean(camera));
+
+  const previewTableNumber = activeCameraTable ?? 1;
+  const leaderboardOverlayNames = useMemo(
+    () => orderedLeaderboard.slice(0, 4).map((playerId) => players.find((player) => player.id === playerId)?.displayName ?? 'TBD'),
+    [orderedLeaderboard, players]
+  );
+  const raceOverlayPlayers = useMemo(() => {
+    const playerA = players[0]?.displayName ?? 'Red Team';
+    const playerB = players[1]?.displayName ?? 'Blue Team';
+    return { red: playerA, blue: playerB };
+  }, [players]);
 
   const completedMatches = matches
     .filter((match) => match.state === 'COMPLETE' && typeof match.round === 'number')
@@ -1214,7 +1282,7 @@ export default function Tournament() {
 
   const handleGoLiveToChannel = () => {
     if (!hasConnectedCameraFeed) {
-      setCameraError('Connect a camera feed before going live.');
+      setCameraError('Connect a camera feed and map it to a table before going live.');
       return;
     }
     if (!hasEligibleBroadcastChannel || !selectedBroadcastChannel) {
@@ -1975,6 +2043,33 @@ export default function Tournament() {
                       </span>
                       <span>Camera table: {activeCameraTable ? `Table ${activeCameraTable}` : 'Not mapped'}</span>
                     </div>
+                    <div className="broadcast-overlay-preview-panel">
+                      <div className="broadcast-overlay-preview-lower-third">
+                        <div className="overlay-label">Race Overlay</div>
+                        <div className="overlay-lower-third-row">
+                          <div className="overlay-side overlay-side--red">
+                            <span>Red</span>
+                            <strong>{raceOverlayPlayers.red}</strong>
+                          </div>
+                          <div className="overlay-divider">VS</div>
+                          <div className="overlay-side overlay-side--blue">
+                            <span>Blue</span>
+                            <strong>{raceOverlayPlayers.blue}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="broadcast-timing-slot-list">
+                      {broadcastConfig.timingSlots.map((slot) => (
+                        <div key={slot.id} className={`broadcast-timing-slot broadcast-timing-slot--${slot.kind.toLowerCase()}`}>
+                          <div>
+                            <span className="broadcast-timing-slot-kind">{slot.kind}</span>
+                            <strong>{slot.label}</strong>
+                          </div>
+                          <span>{slot.durationSeconds}s</span>
+                        </div>
+                      ))}
+                    </div>
                     <div className="broadcast-readiness-panel">
                       {broadcastReadinessChecklist.map((item) => (
                         <span key={item.id} className={`broadcast-readiness-chip ${item.ready ? 'ready' : 'blocked'}`}>
@@ -2008,8 +2103,8 @@ export default function Tournament() {
                       </small>
 
                       <div className="camera-status-grid">
-                        <div className={`camera-status-chip ${cameraConnectionState === 'CONNECTED' ? 'active' : ''}`}>
-                          Camera {cameraConnectionState === 'CONNECTED' ? 'connected' : 'disconnected'}
+                        <div className={`camera-status-chip ${hasConnectedCameraFeed ? 'active' : ''}`}>
+                          Camera {hasConnectedCameraFeed ? 'connected' : 'disconnected'}
                         </div>
                         <div className={`camera-status-chip ${cameraPairCode ? 'active' : ''}`}>
                           Pairing {cameraPairCode ? 'ready' : 'offline'}
@@ -2199,7 +2294,7 @@ export default function Tournament() {
                             type="button"
                             className="secondary-action"
                             onClick={handleDisconnectWirelessCamera}
-                            disabled={cameraConnectionState !== 'CONNECTED'}
+                            disabled={cameraConnectionState !== 'CONNECTED' && !cameraPairCode}
                           >
                             Disconnect
                           </button>
@@ -2210,25 +2305,27 @@ export default function Tournament() {
                       <div className="camera-preview-shell">
                         <div className="camera-preview-stage">
                           <strong>Connected camera-to-table map</strong>
-                          {connectedCameraSources.length === 0 ? (
-                            <span>No connected feeds yet.</span>
+                          {mappedConnectedCameraIds.length === 0 ? (
+                            <span>No connected feeds mapped to a table yet.</span>
                           ) : (
                             <div className="camera-table-map-list">
-                              {connectedCameraSources.map((camera) => (
-                                <label key={`camera-map-${camera.id}`} className="camera-table-map-row">
-                                  <span>{camera.name}</span>
-                                  <select
-                                    value={broadcastConfig.cameraTableMap?.[camera.id] ?? 1}
-                                    onChange={(event) => assignCameraToTable(camera.id, Number(event.target.value))}
-                                  >
-                                    {tableOptions.map((tableNumber) => (
-                                      <option key={`camera-${camera.id}-table-${tableNumber}`} value={tableNumber}>
-                                        Table {tableNumber}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                              ))}
+                              {connectedCameraSources
+                                .filter((camera) => Number(broadcastConfig.cameraTableMap?.[camera.id] ?? 0) > 0)
+                                .map((camera) => (
+                                  <label key={`camera-map-${camera.id}`} className="camera-table-map-row">
+                                    <span>{camera.name}</span>
+                                    <select
+                                      value={broadcastConfig.cameraTableMap?.[camera.id] ?? 1}
+                                      onChange={(event) => assignCameraToTable(camera.id, Number(event.target.value))}
+                                    >
+                                      {tableOptions.map((tableNumber) => (
+                                        <option key={`camera-${camera.id}-table-${tableNumber}`} value={tableNumber}>
+                                          Table {tableNumber}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                ))}
                             </div>
                           )}
                         </div>
@@ -2318,6 +2415,50 @@ export default function Tournament() {
                           </div>
                         </div>
                       ))}
+                    </div>
+
+                    <div className="broadcast-timing-slot-editor">
+                      <div className="broadcast-timing-slot-editor-head">
+                        <strong>Timing slots</strong>
+                        <span>{broadcastConfig.timingSlots.filter((slot) => slot.enabled).length} active</span>
+                      </div>
+                      <div className="broadcast-timing-slot-editor-list">
+                        {broadcastConfig.timingSlots.map((slot) => (
+                          <label key={slot.id} className="broadcast-timing-slot-editor-row">
+                            <input
+                              type="checkbox"
+                              checked={slot.enabled}
+                              onChange={(event) =>
+                                updateBroadcastConfig((current) => ({
+                                  ...current,
+                                  timingSlots: current.timingSlots.map((entry) =>
+                                    entry.id === slot.id ? { ...entry, enabled: event.target.checked } : entry
+                                  )
+                                }))
+                              }
+                            />
+                            <div>
+                              <strong>{slot.label}</strong>
+                              <span>{slot.kind}</span>
+                            </div>
+                            <input
+                              type="number"
+                              min={5}
+                              value={slot.durationSeconds}
+                              onChange={(event) =>
+                                updateBroadcastConfig((current) => ({
+                                  ...current,
+                                  timingSlots: current.timingSlots.map((entry) =>
+                                    entry.id === slot.id
+                                      ? { ...entry, durationSeconds: Math.max(5, Number(event.target.value) || 5) }
+                                      : entry
+                                  )
+                                }))
+                              }
+                            />
+                          </label>
+                        ))}
+                      </div>
                     </div>
 
                     {editingSponsor && (

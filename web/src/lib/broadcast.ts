@@ -50,6 +50,16 @@ export interface BroadcastSponsorCard {
   permanent?: boolean;
 }
 
+export type BroadcastTimingSlotKind = 'SPONSOR' | 'LEADERBOARD' | 'RACE' | 'CUSTOM';
+
+export interface BroadcastTimingSlot {
+  id: string;
+  label: string;
+  kind: BroadcastTimingSlotKind;
+  durationSeconds: number;
+  enabled: boolean;
+}
+
 export interface BroadcastRuntimeConfig {
   cameraId: string;
   channelId: string;
@@ -57,6 +67,7 @@ export interface BroadcastRuntimeConfig {
   connectedCameraIds: string[];
   cameraTableMap: Record<string, number>;
   sponsorCards: BroadcastSponsorCard[];
+  timingSlots: BroadcastTimingSlot[];
   overlayDurationSeconds: number;
   autoRotateSponsors: boolean;
   raceTrackingEnabled: boolean;
@@ -97,6 +108,32 @@ export const DEFAULT_BROADCAST_SPONSOR_CARDS: BroadcastSponsorCard[] = [
     logoDataUrl: getPublicAssetPath('images/promethean-games-logo.png')
   }
 ];
+
+export function createDefaultBroadcastTimingSlots(): BroadcastTimingSlot[] {
+  return [
+    {
+      id: 'leaderboard-bracket-overlay',
+      label: 'Leaderboard / Bracket Overlay',
+      kind: 'LEADERBOARD',
+      durationSeconds: 15,
+      enabled: true
+    },
+    {
+      id: 'race-lower-third-overlay',
+      label: 'Race Lower-Third',
+      kind: 'RACE',
+      durationSeconds: 30,
+      enabled: true
+    },
+    ...DEFAULT_BROADCAST_SPONSOR_CARDS.map((sponsor) => ({
+      id: `slot-${sponsor.id}`,
+      label: `${sponsor.name} Sponsor Slot`,
+      kind: 'SPONSOR' as const,
+      durationSeconds: sponsor.durationSeconds,
+      enabled: sponsor.enabled
+    }))
+  ];
+}
 
 function getPermanentSponsorDefaults(id: string | undefined): BroadcastSponsorCard | null {
   if (!id) return null;
@@ -232,6 +269,7 @@ export function createDefaultBroadcastRuntimeConfig(): BroadcastRuntimeConfig {
     connectedCameraIds: [],
     cameraTableMap: {},
     sponsorCards: ensurePermanentSponsors(getSystemBroadcastSponsorDefaults()),
+    timingSlots: createDefaultBroadcastTimingSlots(),
     overlayDurationSeconds: 8,
     autoRotateSponsors: true,
     raceTrackingEnabled: false,
@@ -269,6 +307,16 @@ export function getBroadcastRuntimeConfig(): BroadcastRuntimeConfig {
           )
         : fallback.cameraTableMap;
 
+    const nextTimingSlots = Array.isArray(parsed.timingSlots) && parsed.timingSlots.length > 0
+      ? parsed.timingSlots.map((slot) => ({
+          id: typeof slot.id === 'string' ? slot.id : `slot-${Date.now()}-${Math.random()}`,
+          label: typeof slot.label === 'string' && slot.label.trim().length > 0 ? slot.label : 'Overlay Slot',
+          kind: slot.kind === 'SPONSOR' || slot.kind === 'LEADERBOARD' || slot.kind === 'RACE' || slot.kind === 'CUSTOM' ? slot.kind : 'CUSTOM',
+          durationSeconds: typeof slot.durationSeconds === 'number' ? Math.max(5, slot.durationSeconds) : 15,
+          enabled: Boolean(slot.enabled ?? true)
+        }))
+      : fallback.timingSlots;
+
     return {
       cameraId: typeof parsed.cameraId === 'string' ? parsed.cameraId : nextCameraList[0]?.id ?? fallback.cameraId,
       channelId: typeof parsed.channelId === 'string' ? parsed.channelId : fallback.channelId,
@@ -276,6 +324,7 @@ export function getBroadcastRuntimeConfig(): BroadcastRuntimeConfig {
       connectedCameraIds: nextConnectedCameraIds,
       cameraTableMap: nextCameraTableMap,
       sponsorCards: ensurePermanentSponsors(nextSponsorCards.map((card) => normalizeSponsorCard(card))),
+      timingSlots: nextTimingSlots,
       overlayDurationSeconds: typeof parsed.overlayDurationSeconds === 'number' ? Math.max(1, parsed.overlayDurationSeconds) : fallback.overlayDurationSeconds,
       autoRotateSponsors: Boolean(parsed.autoRotateSponsors ?? fallback.autoRotateSponsors),
       raceTrackingEnabled: Boolean(parsed.raceTrackingEnabled ?? fallback.raceTrackingEnabled),
