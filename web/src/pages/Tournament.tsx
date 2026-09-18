@@ -434,6 +434,34 @@ export default function Tournament() {
     };
   }, []);
 
+  const selectedBroadcastChannel =
+    allowedBroadcastChannels.find((channel) => channel.id === broadcastConfig.channelId) ??
+    allowedBroadcastChannels[0] ??
+    null;
+  const selectedCameraSource =
+    cameraInputMode === 'QR'
+      ? ({
+          id: 'remote-phone',
+          name: 'QR Paired Phone Camera',
+          type: 'WIFI',
+          connection: 'Strong'
+        } as BroadcastCameraSource)
+      : cameraInputMode === 'NETWORK'
+        ? ({
+            id: `network:${networkCameraUrl || networkCameraName}`,
+            name: networkCameraName.trim() || 'Network Camera',
+            type: 'NETWORK',
+            connection: 'Medium',
+            streamUrl: networkCameraUrl.trim()
+          } as BroadcastCameraSource)
+        : usbAndCaptureSources.find((camera) => camera.id === cameraSourceId) ??
+          usbAndCaptureSources[0] ??
+          null;
+  const activeCameraTable =
+    selectedCameraSource && broadcastConfig.cameraTableMap
+      ? broadcastConfig.cameraTableMap[selectedCameraSource.id] ?? null
+      : null;
+
   const previewSelectedSource = useCallback(async () => {
     if (cameraInputMode === 'QR' || !selectedCameraSource) return;
     if (cameraConnectionState === 'CONNECTED' && activeCameraStreamRef.current && previewVideoRef.current) return;
@@ -481,33 +509,6 @@ export default function Tournament() {
 
   const editingSponsor = broadcastConfig.sponsorCards.find((sponsor) => sponsor.id === editingSponsorId) ?? null;
   const marketingWordCount = (editingSponsor?.marketingBlip || '').trim().split(/\s+/).filter(Boolean).length;
-  const selectedBroadcastChannel =
-    allowedBroadcastChannels.find((channel) => channel.id === broadcastConfig.channelId) ??
-    allowedBroadcastChannels[0] ??
-    null;
-  const selectedCameraSource =
-    cameraInputMode === 'QR'
-      ? ({
-          id: 'remote-phone',
-          name: 'QR Paired Phone Camera',
-          type: 'WIFI',
-          connection: 'Strong'
-        } as BroadcastCameraSource)
-      : cameraInputMode === 'NETWORK'
-        ? ({
-            id: `network:${networkCameraUrl || networkCameraName}`,
-            name: networkCameraName.trim() || 'Network Camera',
-            type: 'NETWORK',
-            connection: 'Medium',
-            streamUrl: networkCameraUrl.trim()
-          } as BroadcastCameraSource)
-        : usbAndCaptureSources.find((camera) => camera.id === cameraSourceId) ??
-          usbAndCaptureSources[0] ??
-          null;
-  const activeCameraTable =
-    selectedCameraSource && broadcastConfig.cameraTableMap
-      ? broadcastConfig.cameraTableMap[selectedCameraSource.id] ?? null
-      : null;
   const hasEligibleBroadcastChannel = Boolean(
     selectedBroadcastChannel &&
       allowedBroadcastChannels.some((channel) => channel.id === selectedBroadcastChannel.id)
@@ -538,15 +539,6 @@ export default function Tournament() {
     .filter((camera): camera is { id: string; name: string; type: 'WIFI' | 'USB' | 'OBS' | 'NETWORK' } => Boolean(camera));
 
   const previewTableNumber = activeCameraTable ?? 1;
-  const leaderboardOverlayNames = useMemo(
-    () => orderedLeaderboard.slice(0, 4).map((playerId) => players.find((player) => player.id === playerId)?.displayName ?? 'TBD'),
-    [orderedLeaderboard, players]
-  );
-  const raceOverlayPlayers = useMemo(() => {
-    const playerA = players[0]?.displayName ?? 'Red Team';
-    const playerB = players[1]?.displayName ?? 'Blue Team';
-    return { red: playerA, blue: playerB };
-  }, [players]);
 
   const completedMatches = matches
     .filter((match) => match.state === 'COMPLETE' && typeof match.round === 'number')
@@ -568,6 +560,15 @@ export default function Tournament() {
       .map((player) => player.id)
       .filter((playerId) => playerId !== championId && playerId !== runnerUpId)
   ];
+  const leaderboardOverlayNames = useMemo(
+    () => orderedLeaderboard.slice(0, 4).map((playerId) => players.find((player) => player.id === playerId)?.displayName ?? 'TBD'),
+    [orderedLeaderboard, players]
+  );
+  const raceOverlayPlayers = useMemo(() => {
+    const playerA = players[0]?.displayName ?? 'Red Team';
+    const playerB = players[1]?.displayName ?? 'Blue Team';
+    return { red: playerA, blue: playerB };
+  }, [players]);
 
   const payoutLeaderboard = orderedLeaderboard
     .slice(0, paidOutSlots)

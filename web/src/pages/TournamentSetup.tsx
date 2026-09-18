@@ -64,7 +64,7 @@ function FieldLabel({ label, hint, htmlFor }: { label: string; hint: string; htm
 
 export default function TournamentSetup() {
   const navigate = useNavigate();
-  const { createTournament } = useTournamentStore();
+  const { tournaments, createTournament } = useTournamentStore();
   const [name, setName] = useState('');
   const [format, setFormat] = useState<TournamentFormat>('SINGLE_ELIMINATION');
   const [isFormatMenuOpen, setIsFormatMenuOpen] = useState(false);
@@ -85,6 +85,7 @@ export default function TournamentSetup() {
   const [venueId, setVenueId] = useState('');
   const [venueName, setVenueName] = useState('');
   const [eventDateTime, setEventDateTime] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [loading, setLoading] = useState(false);
   const currentUser = getCurrentUser();
   const accessTier = getEffectiveTier(currentUser);
@@ -102,6 +103,10 @@ export default function TournamentSetup() {
   const canSelectChipTournament = canUseChipTournament(accessTier);
   const modifiedRaceCap = getModifiedEliminationRaceCap(accessTier);
   const templateLimit = getTierLimit(accessTier, 'templates');
+  const templateOptions = useMemo(
+    () => tournaments.filter((tournament) => tournament.isTemplate),
+    [tournaments]
+  );
   const prizeContributionPerPlayer = calculatePrizeContributionPerPlayer(entryFee, greenFee);
   const selectedFormat = FORMATS.find((option) => option.value === format) ?? FORMATS[0];
   const selectedLocationLabel =
@@ -120,6 +125,39 @@ export default function TournamentSetup() {
 
   const clampRace = (value: number) => Math.max(1, Math.min(modifiedRaceCap, Number(value) || 1));
   const clampShiftRound = (value: number) => Math.max(2, Math.floor(Number(value) || 2));
+
+  const loadTemplate = (templateId: string) => {
+    const template = tournaments.find((entry) => entry.id === templateId && entry.isTemplate);
+    if (!template) return;
+
+    setSelectedTemplateId(template.id);
+    setName(template.name || '');
+    setFormat(template.format || 'SINGLE_ELIMINATION');
+    setEntryFee(Number(template.entryFee || 0));
+    setGreenFee(Number(template.greenFee || 0));
+    setPayoutPositions(Math.max(1, Number(template.payoutPositions || 3)));
+    setTableCount(Math.max(1, Number(template.tableCount || 1)));
+    setLocation(template.location || '');
+    setVenueId(template.venueId || '');
+    setVenueName(template.venueName || template.location || '');
+    setEventDateTime(template.date ? new Date(template.date).toISOString().slice(0, 16) : '');
+
+    if (template.format === 'MODIFIED_ELIMINATION') {
+      setWinnersRaceTo(clampRace(Number(template.winnersRaceTo || 2)));
+      setLosersRaceTo(clampRace(Number(template.losersRaceTo || 1)));
+      setHasRaceShift(Boolean(template.raceShiftStartRound && Number(template.raceShiftStartRound) > 0));
+      setRaceShiftStartRound(clampShiftRound(Number(template.raceShiftStartRound || 3)));
+      setWinnersRaceToAfterShift(clampRace(Number(template.winnersRaceToAfterShift || 1)));
+      setLosersRaceToAfterShift(clampRace(Number(template.losersRaceToAfterShift || 1)));
+    } else {
+      setWinnersRaceTo(2);
+      setLosersRaceTo(1);
+      setHasRaceShift(false);
+      setRaceShiftStartRound(3);
+      setWinnersRaceToAfterShift(1);
+      setLosersRaceToAfterShift(1);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -181,6 +219,34 @@ export default function TournamentSetup() {
           <h1 className="setup-title">Create New Tournament</h1>
           <p className="setup-subtitle">Set up a new tournament with your preferred format</p>
         </div>
+
+        {canSaveTemplate && templateOptions.length > 0 && (
+          <div className="template-loader-row">
+            <label className="template-loader" htmlFor="template-select">
+              <span className="field-label-row">
+                <span>Load a template</span>
+                <FieldHint text="Load a saved tournament template to prefill a new setup for entitled users." />
+              </span>
+              <div className="template-loader-controls">
+                <select
+                  id="template-select"
+                  className="form-input"
+                  value={selectedTemplateId}
+                  onChange={(event) => {
+                    const nextId = event.target.value;
+                    setSelectedTemplateId(nextId);
+                    if (nextId) loadTemplate(nextId);
+                  }}
+                >
+                  <option value="">Select a saved template</option>
+                  {templateOptions.map((template) => (
+                    <option key={template.id} value={template.id}>{template.name}</option>
+                  ))}
+                </select>
+              </div>
+            </label>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="setup-form-card">
           <div className="form-grid">
