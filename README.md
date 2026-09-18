@@ -45,6 +45,8 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
 
+For GitHub Pages or other CI deployments, set the same values in the deploy environment or repository secrets before the build runs. The Pages workflow reads them at build time, so local `.env` files alone are not enough for production deployment.
+
 ### Supabase schema
 
 The repository includes the server-side schema at `supabase/schema.sql`.

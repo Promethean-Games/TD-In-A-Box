@@ -39,6 +39,10 @@ jobs:
 
       - name: Build GitHub Pages app
         working-directory: web
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
         run: npm run build:pages
 
       - name: Upload Pages artifact
