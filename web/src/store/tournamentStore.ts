@@ -301,7 +301,13 @@ export const useTournamentStore = create<TournamentStore>()(
 
         hydrate: () => {
           const tournaments = db.getAll();
-          set({ tournaments, currentTournament: get().currentTournament ? db.getById(get().currentTournament.id) ?? null : null });
+          const currentId = get().currentTournament?.id;
+          const fallbackCurrentTournament = currentId ? db.getById(currentId) ?? null : null;
+          set({
+            tournaments,
+            currentTournament: fallbackCurrentTournament,
+            error: null
+          });
         },
 
         reset: () => {

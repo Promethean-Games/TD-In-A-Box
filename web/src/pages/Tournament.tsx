@@ -42,6 +42,7 @@ import {
 } from '@/lib/subscription';
 import {
   PAYOUT_PERCENT_STEP,
+  type Tournament,
   TournamentSeedMode,
   buildDefaultPayoutPercentages,
   calculatePrizeContributionPerPlayer,
@@ -103,7 +104,7 @@ function getTournamentStageLabel(matchCount: number, status: 'DRAFT' | 'READY' |
 export default function Tournament() {
   const { id } = useParams<{ id: string }>();
   const {
-    currentTournament,
+    currentTournament: currentTournamentStore,
     setCurrentTournament,
     fetchTournament,
     addPlayer,
@@ -116,6 +117,31 @@ export default function Tournament() {
     error,
     clearError
   } = useTournamentStore();
+  const EMPTY_TOURNAMENT: Tournament = {
+    id: '',
+    name: 'Loading tournament…',
+    format: 'SINGLE_ELIMINATION',
+    status: 'DRAFT',
+    seedingMethod: 'ENTERED',
+    tableCount: 1,
+    isTemplate: false,
+    players: [],
+    matches: [],
+    bracketGenerated: false,
+    entryFee: 0,
+    greenFee: 0,
+    payoutPositions: 3,
+    payoutPercentages: [],
+    winnersRaceTo: 2,
+    losersRaceTo: 1,
+    raceShiftStartRound: null,
+    winnersRaceToAfterShift: 1,
+    losersRaceToAfterShift: 1,
+    payouts: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const currentTournament = currentTournamentStore ?? EMPTY_TOURNAMENT;
 
   const [newPlayerName, setNewPlayerName] = useState('');
   const [seedingMode, setSeedingMode] = useState<TournamentSeedMode>('ENTERED');
@@ -139,19 +165,6 @@ export default function Tournament() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraStatusNote, setCameraStatusNote] = useState<string>('Idle');
   const [cameraPairCode, setCameraPairCode] = useState('');
-  const cameraDiagnostics = useMemo(() => {
-    const items: string[] = [
-      `Mode: ${cameraInputMode}`,
-      `Source: ${selectedCameraSource?.name ?? 'none selected'}`,
-      `Source type: ${selectedCameraSource?.type ?? 'none'}`,
-      `Browser camera API: ${typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia ? 'available' : 'unavailable'}`,
-      `Network URL: ${cameraInputMode === 'NETWORK' ? (networkCameraUrl.trim() || '(empty)') : 'N/A'}`,
-      `Active preview stream: ${activePreviewStream ? 'present' : 'not attached'}`,
-      `Preview state: ${cameraConnectionState}`
-    ];
-    if (cameraError) items.push(`Last error: ${cameraError}`);
-    return items;
-  }, [activePreviewStream, cameraConnectionState, cameraError, cameraInputMode, networkCameraUrl, selectedCameraSource]);
   const [cameraPairQrDataUrl, setCameraPairQrDataUrl] = useState('');
   const [cameraPairStatus, setCameraPairStatus] = useState('Not paired');
   const [activePreviewStream, setActivePreviewStream] = useState<MediaStream | null>(null);
@@ -184,7 +197,11 @@ export default function Tournament() {
     }
 
     clearError();
-    fetchTournament(id);
+    try {
+      fetchTournament(id);
+    } catch {
+      setCurrentTournament(null);
+    }
   }, [clearError, fetchTournament, id, setCurrentTournament]);
 
   useEffect(() => {
@@ -242,6 +259,7 @@ export default function Tournament() {
   const canUseNetworkCamera = canAccessEntitlement(currentUser, 'broadcast.tdtv');
   const canUsePlayerIdentity = canAccessEntitlement(currentUser, 'players.universal_id');
   const maxCameraFeeds = getTierLimit(accessTier, 'cameraFeeds');
+
   const totalTables = Math.max(1, Math.floor(Number(currentTournament?.tableCount || 1)));
   const tableOptions = Array.from({ length: totalTables }, (_, index) => index + 1);
   const connectedCameraIds = broadcastConfig.connectedCameraIds ?? [];
@@ -493,6 +511,19 @@ export default function Tournament() {
         : usbAndCaptureSources.find((camera) => camera.id === cameraSourceId) ??
           usbAndCaptureSources[0] ??
           null;
+  const cameraDiagnostics = useMemo(() => {
+    const items: string[] = [
+      `Mode: ${cameraInputMode}`,
+      `Source: ${selectedCameraSource?.name ?? 'none selected'}`,
+      `Source type: ${selectedCameraSource?.type ?? 'none'}`,
+      `Browser camera API: ${typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia ? 'available' : 'unavailable'}`,
+      `Network URL: ${cameraInputMode === 'NETWORK' ? (networkCameraUrl.trim() || '(empty)') : 'N/A'}`,
+      `Active preview stream: ${activePreviewStream ? 'present' : 'not attached'}`,
+      `Preview state: ${cameraConnectionState}`
+    ];
+    if (cameraError) items.push(`Last error: ${cameraError}`);
+    return items;
+  }, [activePreviewStream, cameraConnectionState, cameraError, cameraInputMode, networkCameraUrl, selectedCameraSource]);
   const activeCameraTable =
     selectedCameraSource && broadcastConfig.cameraTableMap
       ? broadcastConfig.cameraTableMap[selectedCameraSource.id] ?? null
@@ -719,20 +750,6 @@ export default function Tournament() {
 
     return entryOrderIds;
   }, [currentTournament?.bracketGenerated, entryOrderIds, manualOrder, normalizeManualSeedIds, players, savedSeedIds, seedingMode]);
-  if (!currentTournament) {
-    return (
-      <div className="tournament-page tournament-page--empty">
-        <div className="empty-state-card">
-          <span className="eyebrow">Tournament</span>
-          <h1>{error ? 'Tournament unavailable' : 'Loading tournament...'}</h1>
-          <p>
-            {error || 'Opening the selected event and preparing the bracket workspace.'}
-          </p>
-          <Link className="primary-btn" to="/tournaments">Back to tournaments</Link>
-        </div>
-      </div>
-    );
-  }
 
   const movePlayerWithinOrder = (order: string[], playerId: string, direction: -1 | 1) => {
     const index = order.indexOf(playerId);

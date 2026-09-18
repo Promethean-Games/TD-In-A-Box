@@ -291,6 +291,15 @@ export function getModifiedEliminationRacePlan(
   };
 }
 
+const VALID_TOURNAMENT_FORMATS = new Set<TournamentFormat>([
+  'SINGLE_ELIMINATION',
+  'DOUBLE_ELIMINATION',
+  'CHIP_TOURNAMENT',
+  'MODIFIED_ELIMINATION'
+]);
+const VALID_TOURNAMENT_STATUSES = new Set<TournamentStatus>(['DRAFT', 'READY', 'ACTIVE', 'COMPLETED']);
+const VALID_SEEDING_MODES = new Set<TournamentSeedMode>(['ENTERED', 'ALPHABETICAL', 'RANDOM', 'MANUAL']);
+
 export function normalizePlayer(player: Partial<Player> | null | undefined, fallbackSeed = 1): Player {
   const identityMode =
     player?.identityMode === 'LINKED' || player?.identityMode === 'LOCAL_ONLY' || player?.identityMode === 'UNRESOLVED'
@@ -328,7 +337,7 @@ export function normalizeMatch(match: Partial<Match> | null | undefined, fallbac
 }
 
 export function normalizeTournament(tournament: Partial<Tournament> | null | undefined): Tournament | null {
-  if (!tournament) return null;
+  if (!tournament || typeof tournament !== 'object') return null;
 
   const rawPlayers = Array.isArray(tournament.players) ? tournament.players : [];
   const rawMatches = Array.isArray(tournament.matches) ? tournament.matches : [];
@@ -342,15 +351,26 @@ export function normalizeTournament(tournament: Partial<Tournament> | null | und
     return { ...match, slot: current };
   });
 
-  const format = (tournament.format as TournamentFormat) ?? 'SINGLE_ELIMINATION';
+  const format =
+    typeof tournament.format === 'string' && VALID_TOURNAMENT_FORMATS.has(tournament.format as TournamentFormat)
+      ? (tournament.format as TournamentFormat)
+      : 'SINGLE_ELIMINATION';
+  const status =
+    typeof tournament.status === 'string' && VALID_TOURNAMENT_STATUSES.has(tournament.status as TournamentStatus)
+      ? (tournament.status as TournamentStatus)
+      : 'DRAFT';
+  const seedingMethod =
+    typeof tournament.seedingMethod === 'string' && VALID_SEEDING_MODES.has(tournament.seedingMethod as TournamentSeedMode)
+      ? (tournament.seedingMethod as TournamentSeedMode)
+      : 'ENTERED';
   const defaultRaceSettings = getDefaultRaceSettingsForFormat(format);
 
   return {
     id: String(tournament.id ?? `tournament-${Math.random().toString(36).slice(2, 8)}`),
-    name: String(tournament.name ?? 'Untitled Tournament'),
+    name: typeof tournament.name === 'string' && tournament.name.trim().length > 0 ? tournament.name.trim() : 'Untitled Tournament',
     format,
-    status: (tournament.status as TournamentStatus) ?? 'DRAFT',
-    seedingMethod: (tournament.seedingMethod as TournamentSeedMode) ?? 'ENTERED',
+    status,
+    seedingMethod,
     tableCount: Number.isFinite(tournament.tableCount) ? Number(tournament.tableCount) : 0,
     isTemplate: Boolean(tournament.isTemplate),
     players: rawPlayers.map((p, index) => normalizePlayer(p, index + 1)),
@@ -389,8 +409,8 @@ export function normalizeTournament(tournament: Partial<Tournament> | null | und
     venueId: typeof tournament.venueId === 'string' && tournament.venueId.trim().length > 0 ? tournament.venueId : null,
     venueName: typeof tournament.venueName === 'string' && tournament.venueName.trim().length > 0 ? tournament.venueName.trim() : undefined,
     date: typeof tournament.date === 'string' && tournament.date ? tournament.date : undefined,
-    createdAt: String(tournament.createdAt ?? new Date().toISOString()),
-    updatedAt: String(tournament.updatedAt ?? new Date().toISOString())
+    createdAt: typeof tournament.createdAt === 'string' && tournament.createdAt.trim().length > 0 ? tournament.createdAt : new Date().toISOString(),
+    updatedAt: typeof tournament.updatedAt === 'string' && tournament.updatedAt.trim().length > 0 ? tournament.updatedAt : new Date().toISOString()
   };
 }
 
