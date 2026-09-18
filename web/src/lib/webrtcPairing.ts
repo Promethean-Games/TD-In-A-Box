@@ -28,6 +28,19 @@ export function generatePairCode(): string {
   return randomCode(6);
 }
 
+export function getPairSignalDiagnostics(sessionId?: string) {
+  const signalSessionKey = sessionId ? `webrtc-pair-${sessionId}` : 'webrtc-pair-pending';
+  const hasBroadcastChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window;
+
+  return {
+    signalSessionKey,
+    hasBroadcastChannel,
+    supabaseConfigured: isSupabaseConfigured,
+    signalReady: isSupabaseConfigured || hasBroadcastChannel,
+    recommendedMode: isSupabaseConfigured ? 'supabase' : hasBroadcastChannel ? 'broadcast-channel' : 'unavailable'
+  };
+}
+
 export async function createPairSignalClient(
   sessionId: string,
   onMessage: (message: PairSignalMessage) => void
@@ -108,7 +121,7 @@ export async function createPairSignalClient(
   }
 
   if (typeof window === 'undefined' || !('BroadcastChannel' in window)) {
-    throw new Error('WebRTC signaling is unavailable in this browser.');
+    throw new Error('Remote camera pairing is unavailable: neither Supabase signaling nor BroadcastChannel is available in this browser/session.');
   }
 
   const fallback = new BroadcastChannel(signalSessionKey);

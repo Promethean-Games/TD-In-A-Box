@@ -56,6 +56,7 @@ import {
   createPairSignalClient,
   DEFAULT_ICE_SERVERS,
   generatePairCode,
+  getPairSignalDiagnostics,
   type PairSignalClient,
   type PairSignalMessage
 } from '@/lib/webrtcPairing';
@@ -188,9 +189,12 @@ export default function Tournament() {
   const matchCarouselCardRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const matchCarouselFrameRef = useRef<number | null>(null);
   const cameraPairUrl = cameraPairCode ? getAppRouteUrl(`/camera-link/${cameraPairCode}`) : '';
+  const pairDiagnostics = useMemo(
+    () => getPairSignalDiagnostics(cameraPairCode || 'pending'),
+    [cameraPairCode]
+  );
 
-  useEffect(() => {
-    if (!id) {
+  useEffect(() => {    if (!id) {
       setCurrentTournament(null);
       clearError();
       return;
@@ -2408,9 +2412,60 @@ export default function Tournament() {
                                     </small>
                                   ) : null}
                                 </div>
+                                <div className="camera-pairing-debug">
+                                  <strong>Remote pairing diagnostics</strong>
+                                  <div className="camera-pairing-debug-grid">
+                                    <div>
+                                      <span>Transport</span>
+                                      <strong>{signalTransport ?? 'Waiting'}</strong>
+                                    </div>
+                                    <div>
+                                      <span>Supabase</span>
+                                      <strong>{pairDiagnostics.supabaseConfigured ? 'Configured' : 'Missing'}</strong>
+                                    </div>
+                                    <div>
+                                      <span>BroadcastChannel</span>
+                                      <strong>{pairDiagnostics.hasBroadcastChannel ? 'Supported' : 'Unavailable'}</strong>
+                                    </div>
+                                    <div>
+                                      <span>Signal key</span>
+                                      <strong>{pairDiagnostics.signalSessionKey}</strong>
+                                    </div>
+                                  </div>
+                                  {!pairDiagnostics.signalReady ? (
+                                    <small className="camera-status-note">
+                                      Pairing cannot complete without Supabase signaling or a supported browser BroadcastChannel.
+                                    </small>
+                                  ) : null}
+                                </div>
                               </div>
                             ) : (
-                              <small>Generate a QR code, scan it with the phone, then tap Connect Camera there.</small>
+                              <div className="camera-pairing-debug">
+                                <strong>Remote pairing diagnostics</strong>
+                                <div className="camera-pairing-debug-grid">
+                                  <div>
+                                    <span>Transport</span>
+                                    <strong>{signalTransport ?? 'Waiting'}</strong>
+                                  </div>
+                                  <div>
+                                    <span>Supabase</span>
+                                    <strong>{pairDiagnostics.supabaseConfigured ? 'Configured' : 'Missing'}</strong>
+                                  </div>
+                                  <div>
+                                    <span>BroadcastChannel</span>
+                                    <strong>{pairDiagnostics.hasBroadcastChannel ? 'Supported' : 'Unavailable'}</strong>
+                                  </div>
+                                  <div>
+                                    <span>Signal key</span>
+                                    <strong>{pairDiagnostics.signalSessionKey}</strong>
+                                  </div>
+                                </div>
+                                {!pairDiagnostics.signalReady ? (
+                                  <small className="camera-status-note">
+                                    Pairing cannot complete without Supabase signaling or a supported browser BroadcastChannel.
+                                  </small>
+                                ) : null}
+                              </div>
                             )}
                           </div>
                         )}

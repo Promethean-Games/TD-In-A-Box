@@ -41,6 +41,55 @@
   padding: 0.75rem 0.9rem;
 }
 
+.camera-sender-debug {
+  border: 1px solid var(--color-border, #334155);
+  border-radius: 0.75rem;
+  background: var(--color-panel-soft, #0f172a);
+  padding: 0.8rem 0.9rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.camera-sender-debug > strong {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-dim, #94a3b8);
+}
+
+.camera-sender-debug-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.65rem;
+}
+
+.camera-sender-debug-grid div {
+  display: grid;
+  gap: 0.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.6rem;
+  background: rgba(15, 23, 42, 0.9);
+  padding: 0.55rem 0.65rem;
+}
+
+.camera-sender-debug-grid span {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-dim, #94a3b8);
+}
+
+.camera-sender-debug-grid strong {
+  font-size: 0.8rem;
+  word-break: break-word;
+}
+
+.camera-sender-status-note {
+  color: var(--color-text-dim, #94a3b8);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 .camera-sender-preview {
   width: 100%;
   border-radius: 0.8rem;

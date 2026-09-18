@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import {
   createPairSignalClient,
   DEFAULT_ICE_SERVERS,
+  getPairSignalDiagnostics,
   type PairSignalClient,
   type PairSignalMessage
 } from '@/lib/webrtcPairing';
@@ -16,6 +17,10 @@ export default function CameraSender() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [signalTransport, setSignalTransport] = useState<'supabase' | 'broadcast-channel' | null>(null);
+  const pairDiagnostics = useMemo(
+    () => getPairSignalDiagnostics(normalizedPairCode || 'pending'),
+    [normalizedPairCode]
+  );
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
@@ -72,6 +77,7 @@ export default function CameraSender() {
   }, []);
 
   const handleSignalMessage = async (message: PairSignalMessage) => {
+    console.debug('[camera-sender] signal message received', message);
     if (message.from !== 'host') return;
     const peer = peerRef.current;
     const signalClient = signalClientRef.current;
@@ -120,6 +126,7 @@ export default function CameraSender() {
     setIsConnecting(true);
     setError(null);
     setStatus('Opening camera...');
+    console.debug('[camera-sender] start connect', { pairCode: normalizedPairCode, diagnostics: pairDiagnostics });
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -143,6 +150,7 @@ export default function CameraSender() {
       const signalClient = await createPairSignalClient(normalizedPairCode, handleSignalMessage);
       signalClientRef.current = signalClient;
       setSignalTransport(signalClient.transport);
+      console.debug('[camera-sender] signaling transport ready', signalClient.transport, pairDiagnostics);
 
       const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
       peerRef.current = peer;
@@ -217,6 +225,33 @@ export default function CameraSender() {
       <div className="camera-sender-status" role="status" aria-live="polite">
         <strong>Status:</strong> {status}
         {signalTransport ? <span> via {signalTransport === 'supabase' ? 'Supabase signaling' : 'Local signaling'}</span> : null}
+      </div>
+
+      <div className="camera-sender-debug">
+        <strong>Debug info</strong>
+        <div className="camera-sender-debug-grid">
+          <div>
+            <span>Transport</span>
+            <strong>{signalTransport ?? 'Waiting'}</strong>
+          </div>
+          <div>
+            <span>Supabase</span>
+            <strong>{pairDiagnostics.supabaseConfigured ? 'Configured' : 'Missing'}</strong>
+          </div>
+          <div>
+            <span>BroadcastChannel</span>
+            <strong>{pairDiagnostics.hasBroadcastChannel ? 'Supported' : 'Unavailable'}</strong>
+          </div>
+          <div>
+            <span>Signal key</span>
+            <strong>{pairDiagnostics.signalSessionKey}</strong>
+          </div>
+        </div>
+        {!pairDiagnostics.signalReady ? (
+          <small className="camera-sender-status-note">
+            Remote camera pairing needs Supabase signaling or a browser BroadcastChannel to exchange ICE and SDP offers.
+          </small>
+        ) : null}
       </div>
 
       {error ? (
