@@ -1153,10 +1153,18 @@ export default function Tournament() {
   };
 
   const handleIncomingPairSignal = async (message: PairSignalMessage) => {
+    console.debug('[tdtv-host] signal message received', message, {
+      hasPeer: Boolean(pairPeerRef.current),
+      hasSignalClient: Boolean(pairSignalClientRef.current),
+      pairCode: cameraPairCode
+    });
     if (message.from !== 'sender') return;
     const peer = pairPeerRef.current;
     const signalClient = pairSignalClientRef.current;
-    if (!peer || !signalClient) return;
+    if (!peer || !signalClient) {
+      console.warn('[tdtv-host] signal message arrived before peer/signal client were ready', message);
+      return;
+    }
 
     try {
       if (message.type === 'ready') {
@@ -1213,6 +1221,7 @@ export default function Tournament() {
   };
 
   const handleStartRemotePairing = async () => {
+    console.debug('[tdtv-host] starting remote pairing', { canUseQrCamera, isSupabaseConfigured });
     if (!canUseQrCamera) {
       setCameraError('Broadcast camera pairing unlocks with Pro or higher.');
       return;

@@ -70,16 +70,18 @@ export async function createPairSignalClient(
     try {
       await new Promise<void>((resolve, reject) => {
         const waitForConnection = setTimeout(() => {
+          console.warn('[webrtc-pair] Supabase channel timed out', { signalSessionKey });
           reject(new Error('Timed out waiting for Supabase signaling.'));
         }, 7000);
-
+ 
         channel.subscribe((status, error) => {
+          console.debug('[webrtc-pair] signal channel status', { signalSessionKey, status, error: error?.message ?? null });
           if (status === 'SUBSCRIBED') {
             clearTimeout(waitForConnection);
             resolve();
             return;
           }
-
+ 
           if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || error) {
             clearTimeout(waitForConnection);
             reject(error ?? new Error('Signal channel failed to connect.'));
