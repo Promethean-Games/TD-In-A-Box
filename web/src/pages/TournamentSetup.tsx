@@ -5,8 +5,10 @@ import { useTournamentStore } from '@/store/tournamentStore';
 import { TournamentFormat, calculatePrizeContributionPerPlayer } from '@/lib/tournament';
 import {
   canCreateTemplates,
+  canUseChipTournament,
   canUseModifiedElimination,
-  getModifiedEliminationRaceCap
+  getModifiedEliminationRaceCap,
+  getTierLimit
 } from '@/lib/subscription';
 import './TournamentSetup.css';
 
@@ -78,10 +80,12 @@ export default function TournamentSetup() {
   const [losersRaceToAfterShift, setLosersRaceToAfterShift] = useState<number>(1);
   const [saveAsTemplate, setSaveAsTemplate] = useState(false);
   const [loading, setLoading] = useState(false);
-  const subscriptionTier = getEffectiveTier(getCurrentUser());
-  const canSaveTemplate = canCreateTemplates(subscriptionTier);
-  const canSelectModifiedElimination = canUseModifiedElimination(subscriptionTier);
-  const modifiedRaceCap = getModifiedEliminationRaceCap(subscriptionTier);
+  const accessTier = getEffectiveTier(getCurrentUser());
+  const canSaveTemplate = canCreateTemplates(accessTier);
+  const canSelectModifiedElimination = canUseModifiedElimination(accessTier);
+  const canSelectChipTournament = canUseChipTournament(accessTier);
+  const modifiedRaceCap = getModifiedEliminationRaceCap(accessTier);
+  const templateLimit = getTierLimit(accessTier, 'templates');
   const prizeContributionPerPlayer = calculatePrizeContributionPerPlayer(entryFee, greenFee);
   const selectedFormat = FORMATS.find((option) => option.value === format) ?? FORMATS[0];
   const raceSummary = hasRaceShift
@@ -91,7 +95,8 @@ export default function TournamentSetup() {
     name.trim().length > 0 &&
     Math.max(1, Math.min(100, Number(payoutPositions) || 1)) >= 1 &&
     Math.max(1, Number(tableCount) || 1) >= 1 &&
-    (format !== 'MODIFIED_ELIMINATION' || canSelectModifiedElimination);
+    (format !== 'MODIFIED_ELIMINATION' || canSelectModifiedElimination) &&
+    (format !== 'CHIP_TOURNAMENT' || canSelectChipTournament);
 
   const clampRace = (value: number) => Math.max(1, Math.min(modifiedRaceCap, Number(value) || 1));
   const clampShiftRound = (value: number) => Math.max(2, Math.floor(Number(value) || 2));
@@ -104,6 +109,10 @@ export default function TournamentSetup() {
     }
     if (format === 'MODIFIED_ELIMINATION' && !canSelectModifiedElimination) {
       alert('Modified Elimination is available to paid members on Pro, Pro+, and Venue tiers.');
+      return;
+    }
+    if (format === 'CHIP_TOURNAMENT' && !canSelectChipTournament) {
+      alert('Chip Tournament is available to paid members on Pro, Pro+, and Venue tiers.');
       return;
     }
 
@@ -188,30 +197,34 @@ export default function TournamentSetup() {
                 <div id="format-accordion-panel" className="format-accordion-panel" role="listbox" aria-label="Tournament format selection">
                   {FORMATS.map((option) => {
                     const active = option.value === format;
-                    const modifiedLocked = option.value === 'MODIFIED_ELIMINATION' && !canSelectModifiedElimination;
+                    const isLocked =
+                      (option.value === 'MODIFIED_ELIMINATION' && !canSelectModifiedElimination) ||
+                      (option.value === 'CHIP_TOURNAMENT' && !canSelectChipTournament);
                     return (
                       <button
                         key={option.value}
                         type="button"
-                        className={`format-tile ${active ? 'active' : ''} ${modifiedLocked ? 'locked' : ''}`}
+                        className={`format-tile ${active ? 'active' : ''} ${isLocked ? 'locked' : ''}`}
                         style={{ background: option.accent }}
                         onClick={() => {
-                          if (modifiedLocked) return;
+                          if (isLocked) return;
                           setFormat(option.value);
                           setIsFormatMenuOpen(false);
                         }}
                         role="option"
                         aria-selected={active}
-                        disabled={modifiedLocked}
+                        disabled={isLocked}
                         title={
-                          modifiedLocked
-                            ? 'Modified Elimination unlocks for paid members on Pro, Pro+, and Venue tiers.'
+                          isLocked
+                            ? option.value === 'CHIP_TOURNAMENT'
+                              ? 'Chip Tournament unlocks for paid members on Pro, Pro+, and Venue tiers.'
+                              : 'Modified Elimination unlocks for paid members on Pro, Pro+, and Venue tiers.'
                             : undefined
                         }
                       >
                         <span className="format-label">{option.label}</span>
                         <span className="format-description">{option.description}</span>
-                        {modifiedLocked && <span className="format-lock-note">Paid feature</span>}
+                        {isLocked && <span className="format-lock-note">Paid feature</span>}
                       </button>
                     );
                   })}
@@ -344,7 +357,7 @@ export default function TournamentSetup() {
                       </div>
                     )}
                     <small className="race-cap-note">
-                      Caps by tier: Pro 3/3, Pro+ 5/5, Venue 10/10.
+                      Paid tiers can set custom race values up to 10/10.
                     </small>
                   </div>
                 )}
@@ -440,11 +453,16 @@ export default function TournamentSetup() {
                     type="checkbox"
                     checked={saveAsTemplate}
                     onChange={(e) => setSaveAsTemplate(e.target.checked)}
+                    disabled={templateLimit === 0}
                   />
                   <span className="toggle-indicator" aria-hidden="true" />
                   <span className="toggle-copy">
                     <strong>Save this setup as a template</strong>
-                    <small>Available on Pro+ and Venue tiers.</small>
+                    <small>
+                      {templateLimit === null
+                        ? 'Available on this tier with venue or internal policy.'
+                        : `Available on Pro and above. This tier allows up to ${templateLimit} templates.`}
+                    </small>
                   </span>
                 </label>
               </div>

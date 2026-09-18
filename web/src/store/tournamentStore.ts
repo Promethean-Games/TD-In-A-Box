@@ -9,6 +9,13 @@ import {
   normalizeTournament,
   normalizePayoutPercentages
 } from '@/lib/tournament';
+import { getCurrentUser, getEffectiveTier } from '@/lib/auth';
+import {
+  canCreateTemplates,
+  canUseChipTournament,
+  canUseModifiedElimination,
+  getTierLimit
+} from '@/lib/subscription';
 
 export interface TournamentStore {
   tournaments: Tournament[];
@@ -71,6 +78,32 @@ export const useTournamentStore = create<TournamentStore>()(
         createTournament: (name, format, config = {}) => {
           set({ loading: true, error: null });
           try {
+            const accessTier = getEffectiveTier(getCurrentUser());
+            const currentTournaments = get().tournaments;
+            const templateCount = currentTournaments.filter((tournament) => tournament.isTemplate).length;
+            const savedRecordCount = currentTournaments.filter((tournament) => !tournament.isTemplate).length;
+            const templateLimit = getTierLimit(accessTier, 'templates');
+            const savedRecordLimit = getTierLimit(accessTier, 'savedTournamentRecords');
+
+            if (format === 'MODIFIED_ELIMINATION' && !canUseModifiedElimination(accessTier)) {
+              throw new Error('Modified Elimination requires Pro, Pro+, Venue, or Internal access.');
+            }
+
+            if (format === 'CHIP_TOURNAMENT' && !canUseChipTournament(accessTier)) {
+              throw new Error('Chip Tournament requires Pro, Pro+, Venue, or Internal access.');
+            }
+
+            if (config.isTemplate) {
+              if (!canCreateTemplates(accessTier)) {
+                throw new Error('Tournament templates require Pro, Pro+, Venue, or Internal access.');
+              }
+              if (templateLimit !== null && templateCount >= templateLimit) {
+                throw new Error(`Template limit reached for your tier (${templateLimit}).`);
+              }
+            } else if (savedRecordLimit !== null && savedRecordCount >= savedRecordLimit) {
+              throw new Error(`Saved tournament record limit reached for your tier (${savedRecordLimit}).`);
+            }
+
             const tournament = db.create(name, format, config);
             set((state) => ({
               tournaments: [tournament, ...state.tournaments],
@@ -220,6 +253,16 @@ export const useTournamentStore = create<TournamentStore>()(
           try {
             const tournament = db.getById(tournamentId);
             if (!tournament) throw new Error('Tournament not found');
+            const accessTier = getEffectiveTier(getCurrentUser());
+            const activeTournamentLimit = getTierLimit(accessTier, 'activeTournaments');
+            const activeTournamentCount = get()
+              .tournaments
+              .filter((entry) => !entry.isTemplate && entry.status === 'ACTIVE' && entry.id !== tournamentId)
+              .length;
+
+            if (tournament.status !== 'ACTIVE' && activeTournamentLimit !== null && activeTournamentCount >= activeTournamentLimit) {
+              throw new Error(`Active tournament limit reached for your tier (${activeTournamentLimit}).`);
+            }
 
             const updated = TournamentEngine.startTournament(tournament);
             set((state) => ({

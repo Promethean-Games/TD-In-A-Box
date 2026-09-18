@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  canAccessEntitlement,
   getCurrentUser,
   getEffectiveTier,
   getUserRoleLabel,
   getUserTierLabel,
+  hasInternalAccess,
   signOutCurrentUser,
   updateCurrentUserProfile,
   updateCurrentUserSubscription
@@ -19,21 +21,21 @@ import {
   submitVenueChannelChangeRequest,
   updateVenueChannelSettings
 } from '@/lib/channel';
-import type { SubscriptionTier } from '@/lib/subscription';
+import { getTierPriceShortLabel, type SubscriptionTier } from '@/lib/subscription';
 import './AccountPage.css';
 
 const SUBSCRIPTION_OPTIONS: { tier: SubscriptionTier; name: string; price: string; detail: string }[] = [
-  { tier: 'BASIC', name: 'Basic', price: 'Free', detail: 'Core tournament workflow for individual testing.' },
-  { tier: 'PRO', name: 'Pro', price: '$4.99/mo', detail: 'Broadcast basics, templates, and expanded tournament tools.' },
-  { tier: 'PRO_PLUS', name: 'Pro+', price: '$9.99/mo', detail: 'TDTV channel access, advanced broadcast tools, and branding.' },
-  { tier: 'VENUE', name: 'Venue', price: 'Custom', detail: 'Venue-level channel, device, and broadcast controls.' }
+  { tier: 'BASIC', name: 'Basic', price: getTierPriceShortLabel('BASIC'), detail: 'Core tournament workflow for individual testing.' },
+  { tier: 'PRO', name: 'Pro', price: getTierPriceShortLabel('PRO'), detail: 'Broadcast basics, templates, and expanded tournament tools.' },
+  { tier: 'PRO_PLUS', name: 'Pro+', price: getTierPriceShortLabel('PRO_PLUS'), detail: 'TDTV channel access, advanced broadcast tools, and branding.' },
+  { tier: 'VENUE', name: 'Venue', price: getTierPriceShortLabel('VENUE'), detail: 'Venue-level channel, device, and broadcast controls.' }
 ];
 
 const BROADCAST_BILLING_OPTIONS = [
   {
     tier: 'PRO' as const,
     name: 'Pro',
-    price: '$4.99/mo',
+    price: getTierPriceShortLabel('PRO'),
     kicker: 'In-room production',
     detail: 'Built for local stream control inside the venue.',
     emphasis: 'Good for operators who want overlays, camera pairing, and broadcast tools without TDTV distribution.',
@@ -43,7 +45,7 @@ const BROADCAST_BILLING_OPTIONS = [
   {
     tier: 'PRO_PLUS' as const,
     name: 'Pro+',
-    price: '$9.99/mo',
+    price: getTierPriceShortLabel('PRO_PLUS'),
     kicker: 'TDTV-ready coverage',
     detail: 'Built for public-facing streams and the stronger upsell path.',
     emphasis: 'Use this tier when you want the tournament on TV, on the guide, and packaged with stronger broadcast controls.',
@@ -63,8 +65,8 @@ export default function AccountPage() {
   const [, setRefreshKey] = useState(0);
   const [profileNameDraft, setProfileNameDraft] = useState(user.name);
   const [profileEmailDraft, setProfileEmailDraft] = useState(user.email);
-  const isVenueAccount = user.role === 'VENUE_ADMIN' || user.tier === 'VENUE';
   const isPlatformAdmin = user.role === 'PLATFORM_ADMIN';
+  const isVenueAccount = canAccessEntitlement(user, 'venue.administration') || hasInternalAccess(user);
   const currentSection = searchParams.get('section') === 'billing' ? 'billing' : 'profile';
   const billingOffer = searchParams.get('offer');
   const showBroadcastOffer = currentSection === 'billing' && billingOffer === 'broadcast' && !isPlatformAdmin;
@@ -278,7 +280,7 @@ export default function AccountPage() {
                 <p>
                   Platform Admin accounts carry universal entitlements across tournament, venue, channel, and broadcast workflows.
                 </p>
-                <div className="value">Effective feature tier: {effectiveTier.replace('_', '+')}</div>
+                <div className="value">Effective feature tier: {effectiveTier === 'INTERNAL' ? 'INTERNAL' : effectiveTier.replace('_', '+')}</div>
               </div>
             ) : (
               <>

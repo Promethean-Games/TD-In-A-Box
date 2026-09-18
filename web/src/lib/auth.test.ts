@@ -6,7 +6,7 @@ import {
   getSystemBroadcastSponsorDefaults,
   getBroadcastRuntimeConfig
 } from './broadcast';
-import { getEffectiveTier, getUserTierLabel, hasPermission, listEffectivePermissions, type AppUser } from './auth';
+import { canAccessEntitlement, getEffectiveTier, getUserTierLabel, hasPermission, listEffectivePermissions, type AppUser } from './auth';
 
 const platformAdmin: AppUser = {
   id: 'platform-admin',
@@ -58,28 +58,48 @@ const venueAdmin: AppUser = {
   permissions: ['venue.view', 'venue.edit']
 };
 
+const basicTd: AppUser = {
+  id: 'basic-td',
+  name: 'Basic TD',
+  email: 'basic-td@example.com',
+  role: 'TD',
+  tier: 'BASIC',
+  status: 'ACTIVE',
+  verified: true,
+  venueIds: [],
+  permissions: ['tournament.create', 'td.manage_profile', 'tournament.manage_broadcast']
+};
+
 describe('authorization model', () => {
   it('grants platform admin all platform powers', () => {
     expect(hasPermission(platformAdmin, 'platform.manage_users')).toBe(true);
     expect(hasPermission(platformAdmin, 'platform.manage_channels')).toBe(true);
-    expect(getEffectiveTier(platformAdmin)).toBe('VENUE');
+    expect(getEffectiveTier(platformAdmin)).toBe('INTERNAL');
     expect(getUserTierLabel(platformAdmin)).toBe('Platform Admin');
   });
 
   it('blocks bare users from pro+ permissions', () => {
     expect(hasPermission(basicUser, 'pro.templates')).toBe(false);
     expect(hasPermission(basicUser, 'proplus.td_channel')).toBe(false);
+    expect(canAccessEntitlement(basicUser, 'broadcast.local')).toBe(false);
   });
 
   it('allows pro+ TDs to access TD channel entitlement', () => {
     expect(proPlusTd.tier).toBe('PRO_PLUS');
     expect(hasPermission(proPlusTd, 'proplus.td_channel')).toBe(true);
+    expect(canAccessEntitlement(proPlusTd, 'broadcast.tdtv')).toBe(true);
     expect(listEffectivePermissions(proPlusTd)).toContain('proplus.td_channel');
   });
 
   it('restricts venue admin to the correct venue only', () => {
     expect(hasPermission(venueAdmin, 'venue.view')).toBe(true);
     expect(hasPermission(venueAdmin, 'platform.manage_users')).toBe(false);
+  });
+
+  it('does not let role alone grant paid features', () => {
+    expect(hasPermission(basicTd, 'td.manage_profile')).toBe(false);
+    expect(hasPermission(basicTd, 'tournament.manage_broadcast')).toBe(false);
+    expect(canAccessEntitlement(basicTd, 'identity.td_profile')).toBe(false);
   });
 
   it('allows pro+ broadcast control for authorized TD accounts', () => {

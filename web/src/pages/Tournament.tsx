@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { Link, useParams } from 'react-router-dom';
-import { getCurrentUser, hasPermission } from '@/lib/auth';
+import { canAccessEntitlement, getCurrentUser, getEffectiveTier } from '@/lib/auth';
 import {
   type BroadcastCameraSource,
   type BroadcastRuntimeConfig,
@@ -32,7 +32,10 @@ import {
   getChannelNamingConventionHelp
 } from '@/lib/channel';
 import {
+  getTierLimit,
   PAYOUT_PERCENT_STEP,
+} from '@/lib/subscription';
+import {
   TournamentSeedMode,
   buildDefaultPayoutPercentages,
   calculatePrizeContributionPerPlayer,
@@ -201,28 +204,15 @@ export default function Tournament() {
   const totalPrizePool = payouts.reduce((sum, payout) => sum + (Number(payout.amount) || 0), 0);
   const payoutShareTotal = payoutShareDraft.reduce((sum, value) => sum + value, 0);
   const currentUser = getCurrentUser();
-  const isPayingMember =
-    hasPermission(currentUser, 'pro.local_broadcast') ||
-    hasPermission(currentUser, 'platform.manage_broadcasts');
-  const canManageSponsorSlots =
-    hasPermission(currentUser, 'proplus.branding') ||
-    hasPermission(currentUser, 'platform.manage_broadcasts');
-  const canUseTdChannelHub =
-    hasPermission(currentUser, 'proplus.td_channel') ||
-    hasPermission(currentUser, 'venue.view_broadcasts') ||
-    hasPermission(currentUser, 'platform.manage_broadcasts');
+  const accessTier = getEffectiveTier(currentUser);
+  const isPayingMember = canAccessEntitlement(currentUser, 'broadcast.local');
+  const canManageSponsorSlots = canAccessEntitlement(currentUser, 'broadcast.sponsors');
+  const canUseTdChannelHub = canAccessEntitlement(currentUser, 'broadcast.tdtv');
   const canUseQrCamera = isPayingMember;
   const canUseUsbCamera = isPayingMember;
-  const canUseNetworkCamera =
-    hasPermission(currentUser, 'proplus.wifi_camera') ||
-    hasPermission(currentUser, 'venue.manage_devices') ||
-    hasPermission(currentUser, 'platform.manage_broadcasts');
-  const maxCameraFeeds =
-    currentUser.role === 'PLATFORM_ADMIN' || currentUser.tier === 'VENUE'
-      ? 25
-      : currentUser.tier === 'PRO_PLUS'
-        ? 3
-        : 1;
+  const canUseNetworkCamera = canAccessEntitlement(currentUser, 'broadcast.tdtv');
+  const canUsePlayerIdentity = canAccessEntitlement(currentUser, 'players.universal_id');
+  const maxCameraFeeds = getTierLimit(accessTier, 'cameraFeeds');
   const totalTables = Math.max(1, Math.floor(Number(currentTournament?.tableCount || 1)));
   const tableOptions = Array.from({ length: totalTables }, (_, index) => index + 1);
   const connectedCameraIds = broadcastConfig.connectedCameraIds ?? [];
@@ -751,7 +741,7 @@ export default function Tournament() {
       connected.add(cameraId);
       return {
         ...current,
-        connectedCameraIds: Array.from(connected).slice(0, maxCameraFeeds),
+        connectedCameraIds: maxCameraFeeds === null ? Array.from(connected) : Array.from(connected).slice(0, maxCameraFeeds),
         cameraId
       };
     });
@@ -781,6 +771,10 @@ export default function Tournament() {
   };
 
   const handleUseExistingPlayerProfile = (playerId: string) => {
+    if (!canUsePlayerIdentity) {
+      alert('Player Database and Universal Player ID tools require Pro, Pro+, Venue, or Internal access.');
+      return;
+    }
     const player = players.find((entry) => entry.id === playerId);
     if (!player) return;
     const match = findUniversalPlayerProfileByName(player.displayName);
@@ -793,6 +787,10 @@ export default function Tournament() {
   };
 
   const handleCreatePlayerProfile = (playerId: string) => {
+    if (!canUsePlayerIdentity) {
+      alert('Player Database and Universal Player ID tools require Pro, Pro+, Venue, or Internal access.');
+      return;
+    }
     const player = players.find((entry) => entry.id === playerId);
     if (!player) return;
     const profile = createUniversalPlayerProfile(player.displayName);
@@ -914,7 +912,7 @@ export default function Tournament() {
       setCameraError('WebRTC is not supported in this browser.');
       return;
     }
-    if (!connectedCameraIds.includes('remote-phone') && connectedFeedCount >= maxCameraFeeds) {
+    if (maxCameraFeeds !== null && !connectedCameraIds.includes('remote-phone') && connectedFeedCount >= maxCameraFeeds) {
       setCameraError(`Feed limit reached for your tier (${maxCameraFeeds}). Disconnect another feed first.`);
       return;
     }
@@ -1046,7 +1044,7 @@ export default function Tournament() {
       setCameraError('Enter a browser-accessible network camera URL first.');
       return;
     }
-    if (!connectedCameraIds.includes(selectedCameraSource.id) && connectedFeedCount >= maxCameraFeeds) {
+    if (maxCameraFeeds !== null && !connectedCameraIds.includes(selectedCameraSource.id) && connectedFeedCount >= maxCameraFeeds) {
       setCameraError(`Feed limit reached for your tier (${maxCameraFeeds}). Disconnect another feed first.`);
       return;
     }
@@ -1615,12 +1613,14 @@ export default function Tournament() {
                         <div className="player-identity-meta">
                           <span className={`player-identity-badge player-identity-badge--${playerIdentityMode.toLowerCase()}`}>
                             {playerIdentityMode === 'UNRESOLVED'
-                              ? 'Needs identity choice'
+                              ? canUsePlayerIdentity
+                                ? 'Needs identity choice'
+                                : 'Local-only entry'
                               : playerIdentityMode === 'LINKED'
                                 ? `Linked ID: ${player.universalProfileId ?? 'N/A'}`
                                 : 'Local-only entry'}
                           </span>
-                          {!currentTournament.bracketGenerated && !isTournamentReadOnly && (
+                          {canUsePlayerIdentity && !currentTournament.bracketGenerated && !isTournamentReadOnly && (
                             <button
                               type="button"
                               className="small-action-btn"
@@ -1635,7 +1635,7 @@ export default function Tournament() {
                             </button>
                           )}
                         </div>
-                        {!currentTournament.bracketGenerated && !isTournamentReadOnly && identityPromptOpenByPlayerId[player.id] && (
+                        {canUsePlayerIdentity && !currentTournament.bracketGenerated && !isTournamentReadOnly && identityPromptOpenByPlayerId[player.id] && (
                           <div className="player-identity-prompt">
                             <p>
                               Is this <strong>{player.displayName}</strong> from existing player records, should we create a new player profile, or keep local-only?
@@ -1934,7 +1934,9 @@ export default function Tournament() {
                         USB camera input is available on Pro and above. Pro uses QR pairing for the fastest wireless setup, while network camera sources unlock on Pro+ and above.
                       </p>
                       <small className="camera-tier-limit">
-                        Feed limit: {maxCameraFeeds} camera{maxCameraFeeds === 1 ? '' : 's'} on your tier ({connectedFeedCount} connected).
+                        {maxCameraFeeds === null
+                          ? `Multi-camera support is enabled on your tier (${connectedFeedCount} connected).`
+                          : `Feed limit: ${maxCameraFeeds} camera${maxCameraFeeds === 1 ? '' : 's'} on your tier (${connectedFeedCount} connected).`}
                       </small>
 
                       <div className="camera-status-grid">

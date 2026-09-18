@@ -1,6 +1,15 @@
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { type SubscriptionTier, hasEntitlement, setSubscriptionTier } from '@/lib/subscription';
+import {
+  type AccessTier,
+  type EntitlementId,
+  type SubscriptionTier,
+  getEntitlementDefinition,
+  hasEntitlement,
+  isSubscriptionTier,
+  resolveAccessTier,
+  setSubscriptionTier
+} from '@/lib/subscription';
 
 export type UserRole = 'PLATFORM_ADMIN' | 'VENUE_ADMIN' | 'TD' | 'USER';
 export type AccountStatus = 'ACTIVE' | 'INACTIVE' | 'SUSPENDED';
@@ -55,27 +64,6 @@ export interface AuthSignUpResult {
   requiresEmailConfirmation: boolean;
 }
 
-function applyPlatformAdminOverrides(user: AppUser): AppUser {
-  if (user.role !== 'PLATFORM_ADMIN') {
-    return {
-      ...user,
-      permissions: normalizePermissions(user.permissions, user.role)
-    };
-  }
-
-  const mergedPermissions = Array.from(
-    new Set<PermissionName>([...ROLE_PERMISSIONS.PLATFORM_ADMIN, ...normalizePermissions(user.permissions, 'PLATFORM_ADMIN')])
-  );
-
-  return {
-    ...user,
-    tier: 'VENUE',
-    status: 'ACTIVE',
-    verified: true,
-    permissions: mergedPermissions
-  };
-}
-
 export const ROLE_PERMISSIONS: Record<UserRole, PermissionName[]> = {
   PLATFORM_ADMIN: [
     'platform.manage_users',
@@ -84,20 +72,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, PermissionName[]> = {
     'platform.manage_tds',
     'platform.manage_subscriptions',
     'platform.manage_broadcasts',
-    'platform.manage_events',
-    'venue.view',
-    'venue.edit',
-    'venue.manage_devices',
-    'venue.view_events',
-    'venue.view_broadcasts',
-    'tournament.create',
-    'tournament.edit',
-    'tournament.manage',
-    'tournament.view_history',
-    'tournament.manage_broadcast',
-    'tournament.brand',
-    'td.manage_profile',
-    'td.view_channel'
+    'platform.manage_events'
   ],
   VENUE_ADMIN: [
     'venue.view',
@@ -118,7 +93,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, PermissionName[]> = {
     'td.manage_profile',
     'td.view_channel'
   ],
-  USER: ['basic.tournament_limit']
+  USER: []
 };
 
 export const PERMISSION_DESCRIPTIONS: Record<PermissionName, string> = {
@@ -142,17 +117,53 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionName, string> = {
   'tournament.brand': 'Configure branding and overlays',
   'td.manage_profile': 'Manage TD profile details',
   'td.view_channel': 'View TD channel information',
-  'basic.tournament_limit': 'Basic tier cap for limited tournament history',
+  'basic.tournament_limit': 'Basic tournament history allowance',
   'pro.templates': 'Save and reuse tournament templates',
-  'pro.history': 'Keep additional tournament history',
-  'pro.profile': 'Create and manage profile',
+  'pro.history': 'Access expanded tournament history',
+  'pro.profile': 'Access TD profile features',
   'pro.local_broadcast': 'Use local broadcasting tools',
-  'proplus.td_channel': 'Access a permanent TDTV channel',
+  'proplus.td_channel': 'Publish to TDTV',
   'proplus.advanced_broadcast': 'Use advanced broadcast controls',
-  'proplus.obs': 'Use OBS integration',
-  'proplus.wifi_camera': 'Configure Wi-Fi camera settings',
+  'proplus.obs': 'Use advanced broadcast overlay workflows',
+  'proplus.wifi_camera': 'Use TDTV-capable network camera workflows',
   'proplus.branding': 'Configure tournament branding'
 };
+
+const PERMISSION_ENTITLEMENTS: Partial<Record<PermissionName, EntitlementId>> = {
+  'venue.view': 'venue.administration',
+  'venue.edit': 'venue.administration',
+  'venue.manage_devices': 'broadcast.venue_network',
+  'venue.view_events': 'venue.administration',
+  'venue.view_broadcasts': 'broadcast.venue_network',
+  'tournament.view_history': 'tournament.history.basic',
+  'tournament.manage_broadcast': 'broadcast.local',
+  'tournament.brand': 'broadcast.branding',
+  'td.manage_profile': 'identity.td_profile',
+  'td.view_channel': 'identity.tdtv_presence',
+  'basic.tournament_limit': 'tournament.history.basic',
+  'pro.templates': 'tournament.templates',
+  'pro.history': 'tournament.history.expanded',
+  'pro.profile': 'identity.td_profile',
+  'pro.local_broadcast': 'broadcast.local',
+  'proplus.td_channel': 'broadcast.tdtv',
+  'proplus.advanced_broadcast': 'broadcast.overlays_advanced',
+  'proplus.obs': 'broadcast.overlays_advanced',
+  'proplus.wifi_camera': 'broadcast.tdtv',
+  'proplus.branding': 'broadcast.branding'
+};
+
+const PURE_ENTITLEMENT_PERMISSIONS = new Set<PermissionName>([
+  'basic.tournament_limit',
+  'pro.templates',
+  'pro.history',
+  'pro.profile',
+  'pro.local_broadcast',
+  'proplus.td_channel',
+  'proplus.advanced_broadcast',
+  'proplus.obs',
+  'proplus.wifi_camera',
+  'proplus.branding'
+]);
 
 const USER_STORAGE_KEY = 'tdiab_current_user';
 const DEFAULT_USER: AppUser = {
@@ -164,15 +175,13 @@ const DEFAULT_USER: AppUser = {
   status: 'ACTIVE',
   verified: false,
   venueIds: [],
-  permissions: ROLE_PERMISSIONS.USER
+  permissions: []
 };
+
+const PLATFORM_ADMIN_EMAILS = ['info@promethean-games.com'];
 
 function isValidRole(value: unknown): value is UserRole {
   return value === 'PLATFORM_ADMIN' || value === 'VENUE_ADMIN' || value === 'TD' || value === 'USER';
-}
-
-function isValidTier(value: unknown): value is SubscriptionTier {
-  return value === 'BASIC' || value === 'PRO' || value === 'PRO_PLUS' || value === 'VENUE';
 }
 
 function isValidStatus(value: unknown): value is AccountStatus {
@@ -188,8 +197,25 @@ function normalizeVenueIds(value: unknown): string[] {
 }
 
 function normalizePermissions(value: unknown, role: UserRole): PermissionName[] {
-  if (!Array.isArray(value)) return ROLE_PERMISSIONS[role];
-  return value.filter(isValidPermission);
+  const basePermissions = ROLE_PERMISSIONS[role];
+  if (!Array.isArray(value)) return basePermissions;
+  return Array.from(new Set<PermissionName>([...basePermissions, ...value.filter(isValidPermission)]));
+}
+
+function applyPlatformAdminOverrides(user: AppUser): AppUser {
+  if (user.role !== 'PLATFORM_ADMIN') {
+    return {
+      ...user,
+      permissions: normalizePermissions(user.permissions, user.role)
+    };
+  }
+
+  return {
+    ...user,
+    status: 'ACTIVE',
+    verified: true,
+    permissions: normalizePermissions(user.permissions, 'PLATFORM_ADMIN')
+  };
 }
 
 function persistCurrentUser(user: AppUser): AppUser {
@@ -197,16 +223,8 @@ function persistCurrentUser(user: AppUser): AppUser {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(normalizedUser));
   }
-  setSubscriptionTier(getEffectiveTier(normalizedUser));
+  setSubscriptionTier(normalizedUser.tier);
   return normalizedUser;
-}
-
-export function clearCurrentUser(): AppUser {
-  if (typeof window !== 'undefined') {
-    window.localStorage.removeItem(USER_STORAGE_KEY);
-  }
-  setSubscriptionTier('BASIC');
-  return DEFAULT_USER;
 }
 
 function fromStoredUser(user: Partial<AppUser>): AppUser {
@@ -216,7 +234,7 @@ function fromStoredUser(user: Partial<AppUser>): AppUser {
     name: typeof user.name === 'string' && user.name.length > 0 ? user.name : DEFAULT_USER.name,
     email: typeof user.email === 'string' ? user.email : DEFAULT_USER.email,
     role,
-    tier: isValidTier(user.tier) ? user.tier : 'BASIC',
+    tier: isSubscriptionTier(user.tier) ? user.tier : 'BASIC',
     status: isValidStatus(user.status) ? user.status : 'ACTIVE',
     verified: Boolean(user.verified),
     venueIds: normalizeVenueIds(user.venueIds),
@@ -226,8 +244,6 @@ function fromStoredUser(user: Partial<AppUser>): AppUser {
   });
 }
 
-const PLATFORM_ADMIN_EMAILS = ['info@promethean-games.com'];
-
 function mapSupabaseUser(user: SupabaseUser): AppUser {
   const appMetadata = user.app_metadata ?? {};
   const userMetadata = user.user_metadata ?? {};
@@ -235,7 +251,7 @@ function mapSupabaseUser(user: SupabaseUser): AppUser {
   const isPlatformAdminUser = PLATFORM_ADMIN_EMAILS.includes(email.toLowerCase());
   const role = isPlatformAdminUser ? 'PLATFORM_ADMIN' : isValidRole(appMetadata.role) ? appMetadata.role : 'USER';
 
-  return {
+  return applyPlatformAdminOverrides({
     id: user.id,
     name:
       typeof userMetadata.name === 'string' && userMetadata.name.length > 0
@@ -245,14 +261,18 @@ function mapSupabaseUser(user: SupabaseUser): AppUser {
           : email?.split('@')[0] ?? 'User',
     email,
     role,
-    tier: isPlatformAdminUser ? 'VENUE' : isValidTier(appMetadata.tier) ? appMetadata.tier : 'BASIC',
+    tier: isSubscriptionTier(appMetadata.tier) ? appMetadata.tier : 'BASIC',
     status: isPlatformAdminUser ? 'ACTIVE' : isValidStatus(appMetadata.status) ? appMetadata.status : 'ACTIVE',
     verified: isPlatformAdminUser ? true : Boolean(appMetadata.verified),
     venueIds: normalizeVenueIds(appMetadata.venue_ids),
     tdProfileId: typeof appMetadata.td_profile_id === 'string' ? appMetadata.td_profile_id : undefined,
     tdChannelId: typeof appMetadata.td_channel_id === 'number' ? appMetadata.td_channel_id : undefined,
     permissions: normalizePermissions(appMetadata.permissions, role)
-  };
+  });
+}
+
+function hasDirectPermission(user: AppUser, permission: PermissionName): boolean {
+  return Boolean(user.permissions?.includes(permission) || ROLE_PERMISSIONS[user.role].includes(permission));
 }
 
 export function getCurrentUser(): AppUser {
@@ -272,26 +292,63 @@ export function setCurrentUser(_userId: string): AppUser {
   return persistCurrentUser(DEFAULT_USER);
 }
 
+export function clearCurrentUser(): AppUser {
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(USER_STORAGE_KEY);
+  }
+  setSubscriptionTier('BASIC');
+  return DEFAULT_USER;
+}
+
+export function getEffectiveTier(user: AppUser | null | undefined): AccessTier {
+  return resolveAccessTier(user?.role, user?.tier);
+}
+
+export function hasInternalAccess(user: AppUser | null | undefined): boolean {
+  return Boolean(user && user.status === 'ACTIVE' && user.verified && getEffectiveTier(user) === 'INTERNAL');
+}
+
+export function canAccessEntitlement(user: AppUser | null | undefined, entitlementId: EntitlementId): boolean {
+  if (!user || user.status !== 'ACTIVE') return false;
+  if (hasInternalAccess(user)) return true;
+
+  const definition = getEntitlementDefinition(entitlementId);
+  if (!definition) return false;
+  if (definition.roleRestriction && !definition.roleRestriction.includes(user.role)) {
+    return false;
+  }
+
+  return hasEntitlement(getEffectiveTier(user), entitlementId);
+}
+
+export function ensureEntitlement(user: AppUser | null | undefined, entitlementId: EntitlementId, context?: string): void {
+  if (!canAccessEntitlement(user, entitlementId)) {
+    const suffix = context ? ` for ${context}` : '';
+    throw new Error(`Unauthorized access${suffix}. Required entitlement: ${entitlementId}`);
+  }
+}
+
 export function listEffectivePermissions(user: AppUser | null | undefined): PermissionName[] {
   if (!user || user.status !== 'ACTIVE') return [];
+  if (hasInternalAccess(user)) return Object.keys(PERMISSION_DESCRIPTIONS) as PermissionName[];
 
-  const merged = new Set<PermissionName>([
-    ...(user.permissions ?? []),
-    ...ROLE_PERMISSIONS[user.role],
-    ...(TIER_ENTITLEMENTS[user.tier] ?? [])
-  ]);
-
-  return Array.from(merged);
+  return (Object.keys(PERMISSION_DESCRIPTIONS) as PermissionName[]).filter((permission) => hasPermission(user, permission));
 }
 
 export function hasPermission(user: AppUser | null | undefined, permission: PermissionName): boolean {
   if (!user || user.status !== 'ACTIVE') return false;
-  if (user.role === 'PLATFORM_ADMIN') return Boolean(user.verified);
+  if (hasInternalAccess(user)) return true;
 
-  const effective = listEffectivePermissions(user);
-  if (effective.includes(permission)) return true;
+  const entitlementRequirement = PERMISSION_ENTITLEMENTS[permission];
+  if (PURE_ENTITLEMENT_PERMISSIONS.has(permission)) {
+    return entitlementRequirement ? canAccessEntitlement(user, entitlementRequirement) : false;
+  }
 
-  return hasEntitlement(user.tier, permission);
+  if (!hasDirectPermission(user, permission)) {
+    return false;
+  }
+
+  return entitlementRequirement ? canAccessEntitlement(user, entitlementRequirement) : true;
 }
 
 export function ensurePermission(user: AppUser | null | undefined, permission: PermissionName, context?: string): void {
@@ -303,40 +360,31 @@ export function ensurePermission(user: AppUser | null | undefined, permission: P
 
 export function canAccessVenue(user: AppUser | null | undefined, venueId: string): boolean {
   if (!user || user.status !== 'ACTIVE') return false;
-  if (user.role === 'PLATFORM_ADMIN') return Boolean(user.verified);
-  if (user.role === 'VENUE_ADMIN') return user.venueIds.includes(venueId);
-  return false;
+  if (hasInternalAccess(user)) return true;
+  if (user.role !== 'VENUE_ADMIN') return false;
+  if (!user.venueIds.includes(venueId)) return false;
+  return canAccessEntitlement(user, 'venue.administration');
 }
 
 export function canAccessTournament(user: AppUser | null | undefined, ownerId?: string): boolean {
   if (!user || user.status !== 'ACTIVE') return false;
-  if (user.role === 'PLATFORM_ADMIN') return Boolean(user.verified);
+  if (hasInternalAccess(user)) return true;
   if (user.role === 'TD') {
     return !ownerId || ownerId === user.id || ownerId === user.tdProfileId || user.venueIds.length > 0;
+  }
+  if (user.role === 'VENUE_ADMIN') {
+    return canAccessEntitlement(user, 'venue.administration');
   }
   return false;
 }
 
 export function isProPlusTd(user: AppUser | null | undefined): boolean {
-  return Boolean(user && user.role === 'TD' && user.tier === 'PRO_PLUS');
-}
-
-export const TIER_ENTITLEMENTS: Record<SubscriptionTier, PermissionName[]> = {
-  BASIC: ['basic.tournament_limit'],
-  PRO: ['pro.templates', 'pro.history', 'pro.profile', 'pro.local_broadcast'],
-  PRO_PLUS: ['pro.templates', 'pro.history', 'pro.profile', 'pro.local_broadcast', 'proplus.td_channel', 'proplus.advanced_broadcast', 'proplus.obs', 'proplus.wifi_camera', 'proplus.branding'],
-  VENUE: ['venue.view', 'venue.edit', 'venue.manage_devices', 'venue.view_events', 'venue.view_broadcasts', 'pro.templates', 'pro.history', 'pro.profile', 'pro.local_broadcast', 'proplus.td_channel', 'proplus.advanced_broadcast', 'proplus.obs', 'proplus.wifi_camera', 'proplus.branding']
-};
-
-export function getEffectiveTier(user: AppUser | null | undefined): SubscriptionTier {
-  if (user?.role === 'PLATFORM_ADMIN') return 'VENUE';
-  return user?.tier ?? 'BASIC';
+  return Boolean(user && user.role === 'TD' && canAccessEntitlement(user, 'broadcast.tdtv'));
 }
 
 export function getUserTierLabel(user: AppUser | null | undefined): string {
   if (user?.role === 'PLATFORM_ADMIN') return 'Platform Admin';
-  const tier = getEffectiveTier(user);
-  return tier.replace('_', '+');
+  return (user?.tier ?? 'BASIC').replace('_', '+');
 }
 
 export function getUserRoleLabel(user: AppUser | null | undefined): string {
@@ -461,12 +509,11 @@ export async function updateCurrentUserProfile(name: string, email: string): Pro
 
     if (data.user) {
       const mapped = mapSupabaseUser(data.user);
-      const merged = persistCurrentUser({
+      return persistCurrentUser({
         ...mapped,
         name: trimmedName,
         email: trimmedEmail !== currentUser.email ? mapped.email : trimmedEmail
       });
-      return merged;
     }
   }
 
@@ -483,7 +530,7 @@ export async function updateCurrentUserSubscription(tier: SubscriptionTier): Pro
     return persistCurrentUser(currentUser);
   }
 
-  if (!isValidTier(tier)) {
+  if (!isSubscriptionTier(tier)) {
     throw new Error('Invalid subscription tier.');
   }
 
@@ -492,3 +539,4 @@ export async function updateCurrentUserSubscription(tier: SubscriptionTier): Pro
     tier
   });
 }
+

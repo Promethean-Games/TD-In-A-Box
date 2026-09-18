@@ -1,4 +1,5 @@
 import type { AppUser } from '@/lib/auth';
+import { hasEntitlement, resolveAccessTier } from '@/lib/subscription';
 
 export type ChannelType = 'NETWORK' | 'VENUE' | 'TD';
 export type ChannelStatus = 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'RETIRED';
@@ -208,8 +209,8 @@ function getTdScopedChannels(user: AppUser, channels: ChannelRecord[]): ChannelR
   let scoped = channels.filter((channel) => channel.type === 'TD' && tdIds.includes(channel.entityId));
   if (scoped.length > 0) return scoped;
 
-  const tierAllowsTdChannel = user.tier === 'PRO_PLUS' || user.tier === 'VENUE' || user.role === 'PLATFORM_ADMIN';
-  if (!tierAllowsTdChannel) return [];
+  const accessTier = resolveAccessTier(user.role, user.tier);
+  if (!hasEntitlement(accessTier, 'broadcast.tdtv')) return [];
   const occupied = channels.map((channel) => channel.number);
   const created = createChannelAssignment('TD', `${user.name || 'TD'} Channel`, tdIds[0], occupied);
   const nextChannels = persistChannelRegistry(uniqueById([...channels, created]));
@@ -327,10 +328,11 @@ export function persistEventChannelLinks(eventId: string, links: EventChannelLin
 
 export function getAllowedBroadcastChannelsForUser(user: AppUser): ChannelRecord[] {
   const channels = getChannelRegistry().filter((channel) => channel.status === 'ACTIVE');
+  const accessTier = resolveAccessTier(user.role, user.tier);
   const scoped =
-    user.role === 'PLATFORM_ADMIN'
+    accessTier === 'INTERNAL'
       ? channels
-      : user.role === 'VENUE_ADMIN' || user.tier === 'VENUE'
+      : user.role === 'VENUE_ADMIN' && hasEntitlement(accessTier, 'venue.administration')
         ? getVenueScopedChannels(user, channels)
         : getTdScopedChannels(user, channels);
   return scoped.filter((channel) => !NON_BROADCASTABLE_CHANNELS.has(channel.number));
