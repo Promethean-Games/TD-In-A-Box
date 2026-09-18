@@ -25,17 +25,14 @@ export default function Navigation() {
           {isPlatformAdmin ? (
             <>
               <Link className={isActive(['/admin'])} to="/admin">Overview</Link>
-              <Link className={isActive(['/admin/people'])} to="/admin">People</Link>
-              <Link className={isActive(['/admin/tournaments'])} to="/admin">Tournaments</Link>
-              <Link className={isActive(['/admin/tdtv'])} to="/admin">TDTV</Link>
-              <Link className={isActive(['/admin/billing'])} to="/admin">Billing</Link>
-              <Link className={isActive(['/admin/system'])} to="/admin">System</Link>
+              <Link className={isActive(['/admin', '/tournaments'])} to="/admin">Tournaments</Link>
+              <Link className={isActive(['/tv-guide', '/broadcast'])} to="/tv-guide">TDTV</Link>
             </>
           ) : (
             <>
-              <Link className={isActive(['/'])} to="/">Home</Link>
+              <Link className={isActive(['/'])} to="/">Overview</Link>
               <Link className={isActive(['/tournaments', '/tournament'])} to="/tournaments">Tournaments</Link>
-              <Link className={isActive(['/broadcast', '/tv-guide'])} to="/tv-guide">TDTV / TV Guide</Link>
+              <Link className={isActive(['/broadcast', '/tv-guide'])} to="/tv-guide">TDTV</Link>
             </>
           )}
           {hasPermission(currentUser, 'platform.manage_users') && !isPlatformAdmin && (
