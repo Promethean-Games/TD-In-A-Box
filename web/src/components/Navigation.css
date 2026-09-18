@@ -2,32 +2,39 @@
   position: sticky;
   top: 0;
   z-index: 100;
-  backdrop-filter: blur(8px);
-  background: rgba(8, 12, 17, 0.84);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  background: rgba(8, 13, 19, 0.84);
+  border-bottom: 1px solid var(--border);
 }
 
 .global-nav__inner {
-  width: min(100%, 1280px);
+  width: min(100%, 1500px);
   margin: 0 auto;
-  padding: 10px 24px;
+  padding: 12px 24px;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
 }
 
 .global-nav__brand {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  color: #f6f8fc;
+  gap: 10px;
+  color: var(--text-primary);
   text-decoration: none;
   white-space: nowrap;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.global-nav__brand strong {
+  font-size: 1.18rem;
 }
 
 .global-nav__links {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   flex: 1;
   flex-wrap: wrap;
@@ -35,22 +42,22 @@
 
 .global-nav__links a {
   text-decoration: none;
-  color: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  background: transparent;
   border-radius: 999px;
   padding: 7px 12px;
-  font-size: 0.82rem;
+  font-size: 0.74rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .global-nav__links a.active,
 .global-nav__links a:hover {
-  color: #fff;
-  border-color: rgba(255, 91, 106, 0.45);
-  background: rgba(255, 91, 106, 0.14);
+  color: var(--text-primary);
+  border-color: rgba(232, 58, 56, 0.36);
+  background: var(--primary-muted);
 }
 
 .global-nav__meta {
@@ -61,20 +68,20 @@
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  border: 1px solid rgba(116, 217, 255, 0.38);
-  background: rgba(116, 217, 255, 0.12);
-  color: #c7efff;
-  font-size: 0.72rem;
+  border: 1px solid rgba(93, 180, 255, 0.38);
+  background: rgba(93, 180, 255, 0.1);
+  color: #cfe9ff;
+  font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   font-weight: 800;
-  padding: 6px 10px;
+  padding: 7px 10px;
 }
 
 .tier-pill--platform-admin {
-  border-color: rgba(100, 255, 179, 0.42);
-  background: rgba(32, 217, 137, 0.12);
-  color: #aefad5;
+  border-color: rgba(61, 220, 151, 0.4);
+  background: rgba(61, 220, 151, 0.09);
+  color: #c0f4d8;
 }
 
 @media (max-width: 768px) {
@@ -84,5 +91,9 @@
 
   .global-nav__meta {
     display: none;
+  }
+
+  .global-nav__brand strong {
+    font-size: 1rem;
   }
 }

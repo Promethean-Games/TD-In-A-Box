@@ -139,6 +139,19 @@ export default function Tournament() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraStatusNote, setCameraStatusNote] = useState<string>('Idle');
   const [cameraPairCode, setCameraPairCode] = useState('');
+  const cameraDiagnostics = useMemo(() => {
+    const items: string[] = [
+      `Mode: ${cameraInputMode}`,
+      `Source: ${selectedCameraSource?.name ?? 'none selected'}`,
+      `Source type: ${selectedCameraSource?.type ?? 'none'}`,
+      `Browser camera API: ${typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia ? 'available' : 'unavailable'}`,
+      `Network URL: ${cameraInputMode === 'NETWORK' ? (networkCameraUrl.trim() || '(empty)') : 'N/A'}`,
+      `Active preview stream: ${activePreviewStream ? 'present' : 'not attached'}`,
+      `Preview state: ${cameraConnectionState}`
+    ];
+    if (cameraError) items.push(`Last error: ${cameraError}`);
+    return items;
+  }, [activePreviewStream, cameraConnectionState, cameraError, cameraInputMode, networkCameraUrl, selectedCameraSource]);
   const [cameraPairQrDataUrl, setCameraPairQrDataUrl] = useState('');
   const [cameraPairStatus, setCameraPairStatus] = useState('Not paired');
   const [activePreviewStream, setActivePreviewStream] = useState<MediaStream | null>(null);
@@ -490,16 +503,31 @@ export default function Tournament() {
     if (cameraConnectionState === 'CONNECTED' && activeCameraStreamRef.current && previewVideoRef.current) return;
 
     if (cameraInputMode === 'NETWORK' && selectedCameraSource.streamUrl) {
-      if (previewVideoRef.current) {
-        previewVideoRef.current.src = selectedCameraSource.streamUrl;
-        previewVideoRef.current.muted = true;
-        previewVideoRef.current.load();
-        await previewVideoRef.current.play().catch(() => undefined);
+      try {
+        if (previewVideoRef.current) {
+          previewVideoRef.current.src = selectedCameraSource.streamUrl;
+          previewVideoRef.current.muted = true;
+          previewVideoRef.current.load();
+          await previewVideoRef.current.play().catch((error) => {
+            const detail = error instanceof Error ? error.message : 'unknown autoplay block';
+            setCameraError(`Network stream loaded but playback was blocked: ${detail}`);
+            setCameraStatusNote(`Preview waiting on browser playback permission for ${selectedCameraSource.name}.`);
+          });
+        }
+        setCameraError(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to load network preview.';
+        setCameraError(`Network camera preview failed: ${message}`);
+        setCameraStatusNote('Preview failed to load for the network source.');
       }
       return;
     }
 
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera APIs are unavailable in this browser. Use a supported browser with camera permissions enabled.');
+      setCameraStatusNote('Camera preview blocked: browser API unavailable.');
+      return;
+    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -513,12 +541,29 @@ export default function Tournament() {
       });
       activeCameraStreamRef.current = stream;
       setActivePreviewStream(stream);
+      setCameraError(null);
       if (previewVideoRef.current) {
         previewVideoRef.current.srcObject = stream;
         previewVideoRef.current.muted = true;
-        await previewVideoRef.current.play().catch(() => undefined);
+        await previewVideoRef.current.play().catch((error) => {
+          const detail = error instanceof Error ? error.message : 'unknown autoplay block';
+          setCameraStatusNote(`Preview stream attached, but autoplay was blocked: ${detail}`);
+        });
       }
-    } catch {
+      setCameraStatusNote(`Preview ready for ${selectedCameraSource.name}.`);
+    } catch (error) {
+      const message =
+        error instanceof DOMException && error.name === 'NotAllowedError'
+          ? 'camera permission was denied in the browser'
+          : error instanceof DOMException && error.name === 'NotFoundError'
+            ? 'the selected camera source was not found or is disconnected'
+            : error instanceof DOMException && error.name === 'NotReadableError'
+              ? 'the camera is already in use by another app or process'
+              : error instanceof Error
+                ? error.message
+                : 'unknown camera access failure';
+      setCameraError(`USB camera preview failed: ${message}`);
+      setCameraStatusNote(`Preview unavailable for ${selectedCameraSource.name}.`);
       if (previewVideoRef.current) {
         previewVideoRef.current.srcObject = null;
       }
@@ -2462,6 +2507,14 @@ export default function Tournament() {
                         </div>
                         <span className="camera-status-note">{cameraStatusNote}</span>
                         {cameraError && <span className="camera-status-error">{cameraError}</span>}
+                        <div className="camera-debug-panel" aria-live="polite">
+                          <strong>Camera debug</strong>
+                          <ul>
+                            {cameraDiagnostics.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
                         {!canUseNetworkCamera && canUseQrCamera && (
                           <span className="camera-status-note">
                             QR phone pairing and USB camera input are included on Pro. Network camera sources unlock with Pro+, Venue, or Platform Admin access.
