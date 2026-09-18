@@ -31,14 +31,23 @@ export function generatePairCode(): string {
 export function getPairSignalDiagnostics(sessionId?: string) {
   const signalSessionKey = sessionId ? `webrtc-pair-${sessionId}` : 'webrtc-pair-pending';
   const hasBroadcastChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window;
+  const signalReady = isSupabaseConfigured || hasBroadcastChannel;
 
   return {
     signalSessionKey,
     hasBroadcastChannel,
     supabaseConfigured: isSupabaseConfigured,
-    signalReady: isSupabaseConfigured || hasBroadcastChannel,
+    signalReady,
     recommendedMode: isSupabaseConfigured ? 'supabase' : hasBroadcastChannel ? 'broadcast-channel' : 'unavailable'
   };
+}
+
+export function getPairingAvailabilityError(): string | null {
+  if (isSupabaseConfigured) return null;
+  if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+    return 'Remote camera pairing is using a local-only browser fallback and cannot connect a phone on another device. Configure Supabase realtime signaling to enable cross-device pairing.';
+  }
+  return 'Remote camera pairing requires Supabase realtime signaling. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY before trying to pair a phone camera.';
 }
 
 export async function createPairSignalClient(

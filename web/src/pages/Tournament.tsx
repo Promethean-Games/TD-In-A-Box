@@ -61,6 +61,8 @@ import {
   type PairSignalMessage
 } from '@/lib/webrtcPairing';
 import { getAppRouteUrl } from '@/lib/appPaths';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { getPairingAvailabilityError } from '@/lib/webrtcPairing';
 import './Tournament.css';
 
 const SEEDING_OPTIONS: { value: TournamentSeedMode; label: string }[] = [
@@ -1213,6 +1215,13 @@ export default function Tournament() {
   const handleStartRemotePairing = async () => {
     if (!canUseQrCamera) {
       setCameraError('Broadcast camera pairing unlocks with Pro or higher.');
+      return;
+    }
+    if (!isSupabaseConfigured) {
+      const pairingError = getPairingAvailabilityError();
+      setCameraError(pairingError ?? 'Remote camera pairing requires Supabase realtime signaling.');
+      setCameraPairStatus('Unavailable');
+      setCameraStatusNote('Remote camera pairing is disabled until the app is configured with Supabase realtime signaling.');
       return;
     }
     if (typeof window === 'undefined' || typeof RTCPeerConnection === 'undefined') {

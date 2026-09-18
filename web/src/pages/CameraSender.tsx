@@ -4,9 +4,11 @@ import {
   createPairSignalClient,
   DEFAULT_ICE_SERVERS,
   getPairSignalDiagnostics,
+  getPairingAvailabilityError,
   type PairSignalClient,
   type PairSignalMessage
 } from '@/lib/webrtcPairing';
+import { isSupabaseConfigured } from '@/lib/supabase';
 import './CameraSender.css';
 
 export default function CameraSender() {
@@ -116,6 +118,12 @@ export default function CameraSender() {
   const connectCamera = async () => {
     if (!normalizedPairCode) {
       setError('Missing pair code in URL.');
+      return;
+    }
+    if (!isSupabaseConfigured) {
+      const pairingError = getPairingAvailabilityError();
+      setError(pairingError ?? 'Remote camera pairing requires Supabase realtime signaling.');
+      setStatus('Unavailable: Supabase signaling not configured');
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
