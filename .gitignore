@@ -1,0 +1,12 @@
+.gradle/
+.idea/
+**/build/
+**/dist/
+**/node_modules/
+*.iml
+local.properties
+.kotlin/
+.toolchain/
+*.log
+pasted_image_*.png
+web/.env.local
