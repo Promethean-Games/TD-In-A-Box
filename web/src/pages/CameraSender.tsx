@@ -59,7 +59,10 @@ export default function CameraSender() {
     try {
       if (message.type === 'offer') {
         const offer = message.payload as RTCSessionDescriptionInit;
-        await peer.setRemoteDescription(offer);
+        if (peer.signalingState !== 'stable' || peer.remoteDescription) {
+          return;
+        }
+        await peer.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
         await signalClient.send({ type: 'answer', from: 'sender', payload: answer, ts: Date.now() });

@@ -112,6 +112,21 @@
   color: white;
 }
 
+.admin-identity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 255, 177, 0.32);
+  background: rgba(36, 210, 128, 0.12);
+  color: #aaf6d0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .account-input,
 .account-select {
   background: rgba(255, 255, 255, 0.03);

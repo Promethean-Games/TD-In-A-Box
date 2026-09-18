@@ -71,6 +71,12 @@
   padding: 6px 10px;
 }
 
+.tier-pill--platform-admin {
+  border-color: rgba(100, 255, 179, 0.42);
+  background: rgba(32, 217, 137, 0.12);
+  color: #aefad5;
+}
+
 @media (max-width: 768px) {
   .global-nav__inner {
     padding: 10px 12px;

@@ -4,6 +4,15 @@ create type public.user_role as enum ('PLATFORM_ADMIN', 'VENUE_ADMIN', 'TD', 'US
 create type public.subscription_tier as enum ('BASIC', 'PRO', 'PRO_PLUS', 'VENUE');
 create type public.account_status as enum ('ACTIVE', 'INACTIVE', 'SUSPENDED');
 create type public.broadcast_status as enum ('LIVE', 'STANDBY', 'UP_NEXT');
+create table if not exists public.platform_admin_config (
+  id uuid primary key default gen_random_uuid(),
+  admin_email text not null unique,
+  is_active boolean not null default true,
+  verified_by text,
+  verified_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -188,3 +197,69 @@ $$ language plpgsql security definer;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+create or replace function public.is_platform_admin_user()
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.profiles p
+    left join public.platform_admin_config pac on pac.admin_email = lower(p.email)
+    where p.id = auth.uid()
+      and p.role = 'PLATFORM_ADMIN'
+      and p.verified = true
+      and pac.is_active = true
+  );
+$$;
+
+create or replace function public.enforce_platform_admin_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  configured_email text;
+begin
+  select lower(admin_email)
+  into configured_email
+  from public.platform_admin_config
+  where is_active = true
+  order by created_at asc
+  limit 1;
+
+  if configured_email is null then
+    configured_email := 'info@promethean-games.com';
+  end if;
+
+  if new.role = 'PLATFORM_ADMIN' and lower(new.email) <> configured_email then
+    raise exception 'Only the configured platform administrator account may be assigned the Platform Admin role.';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger platform_admin_role_guard
+  before insert or update on public.profiles
+  for each row
+  execute function public.enforce_platform_admin_email();
+
+create policy "platform_admin_config_is_private" on public.platform_admin_config
+  for all using (
+    exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid() and p.role = 'PLATFORM_ADMIN' and p.verified = true
+    )
+  );
+
+insert into public.platform_admin_config (admin_email, is_active, verified_by, verified_at)
+values (
+  'info@promethean-games.com',
+  true,
+  'system-bootstrap',
+  now()
+)
+on conflict (admin_email) do nothing;

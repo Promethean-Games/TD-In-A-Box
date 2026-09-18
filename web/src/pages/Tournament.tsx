@@ -351,6 +351,9 @@ export default function Tournament() {
         setNetworkCameraName(preferredNetworkCamera.name);
         setNetworkCameraUrl(preferredNetworkCamera.streamUrl ?? '');
       }
+      if (broadcastConfig.cameraId && broadcastConfig.cameraId !== 'remote-phone') {
+        setCameraSourceId(broadcastConfig.cameraId);
+      }
       return;
     }
 
@@ -901,7 +904,13 @@ export default function Tournament() {
         return;
       }
       if (message.type === 'answer' && message.payload) {
-        await peer.setRemoteDescription(message.payload as RTCSessionDescriptionInit);
+        const answer = message.payload as RTCSessionDescriptionInit;
+        if (peer.signalingState === 'stable' && peer.remoteDescription) {
+          setCameraPairStatus('Remote camera linked.');
+          return;
+        }
+        await peer.setRemoteDescription(new RTCSessionDescription(answer));
+        setCameraConnectionState('CONNECTED');
         setCameraPairStatus('Remote camera linked.');
         return;
       }

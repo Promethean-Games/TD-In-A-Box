@@ -6,7 +6,15 @@ import {
   getSystemBroadcastSponsorDefaults,
   getBroadcastRuntimeConfig
 } from './broadcast';
-import { canAccessEntitlement, getEffectiveTier, getUserTierLabel, hasPermission, listEffectivePermissions, type AppUser } from './auth';
+import {
+  canAccessEntitlement,
+  getEffectiveTier,
+  getUserTierLabel,
+  hasPermission,
+  isAuthorizedPlatformAdminEmail,
+  listEffectivePermissions,
+  type AppUser
+} from './auth';
 
 const platformAdmin: AppUser = {
   id: 'platform-admin',
@@ -75,7 +83,22 @@ describe('authorization model', () => {
     expect(hasPermission(platformAdmin, 'platform.manage_users')).toBe(true);
     expect(hasPermission(platformAdmin, 'platform.manage_channels')).toBe(true);
     expect(getEffectiveTier(platformAdmin)).toBe('INTERNAL');
-    expect(getUserTierLabel(platformAdmin)).toBe('Platform Admin');
+    expect(getUserTierLabel(platformAdmin)).toBe('PLATFORM ADMIN');
+    expect(isAuthorizedPlatformAdminEmail(platformAdmin.email)).toBe(true);
+  });
+
+  it('rejects non-authorized self-promotion to platform admin', () => {
+    const imposter: AppUser = {
+      ...platformAdmin,
+      id: 'imposter-user',
+      name: 'Imposter',
+      email: 'admin@other-domain.com',
+      role: 'PLATFORM_ADMIN',
+      permissions: ['platform.manage_users']
+    };
+
+    expect(isAuthorizedPlatformAdminEmail(imposter.email)).toBe(false);
+    expect(getUserTierLabel(imposter)).toBe('BASIC');
   });
 
   it('blocks bare users from pro+ permissions', () => {

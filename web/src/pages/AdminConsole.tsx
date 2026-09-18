@@ -1,5 +1,16 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+
+interface AdminEntityRecord {
+  id: string;
+  name: string;
+  type: 'USER' | 'TD' | 'VENUE' | 'PLAYER' | 'CHANNEL' | 'TOURNAMENT' | 'BROADCAST';
+  group: 'people' | 'tdtv' | 'events';
+  status: string;
+  identifier: string;
+  detail: string;
+  actions: string[];
+}
 import { getCurrentUser, hasPermission, listEffectivePermissions } from '@/lib/auth';
 import {
   getSystemBroadcastSponsorDefaults,
@@ -12,55 +23,31 @@ import {
   resolveVenueChannelChangeRequest
 } from '@/lib/channel';
 import { useTournamentStore } from '@/store/tournamentStore';
+import { getAuditLogEntries, recordAuditAction } from '@/lib/audit';
 import './AdminConsole.css';
 
-type AdminSectionId = 'overview' | 'people' | 'venues' | 'tdtv' | 'sponsorships' | 'events' | 'billing' | 'system';
+type AdminSectionId = 'overview' | 'people' | 'venues' | 'tdtv' | 'events' | 'billing' | 'system';
 
 const overviewMetrics = [
   {
-    id: 'live-broadcasts',
-    label: 'Live Broadcasts',
-    value: '3',
-    tone: 'red',
-    delta: '+50%',
-    detail: 'vs last week',
-    sparkline: '0,32 24,27 56,18 80,22 118,12 170,16 220,9'
-  },
-  {
-    id: 'live-viewers',
-    label: 'Live Viewers',
-    value: '412',
-    tone: 'blue',
-    delta: '+28%',
-    detail: 'vs last week',
-    sparkline: '0,34 20,30 45,25 68,19 92,23 120,20 150,18 180,15'
-  },
-  {
-    id: 'total-broadcasts',
-    label: 'Total Broadcasts',
-    value: '28',
-    tone: 'purple',
-    delta: '+33%',
-    detail: 'vs last week',
-    sparkline: '0,28 20,26 40,20 68,17 96,15 124,18 160,12'
+    id: 'active-tds',
+    label: 'Active TDs',
+    value: '47',
+    tone: 'amber',
+    delta: '+12%',
+    detail: 'network-wide',
+    sparkline: '0,35 24,29 52,26 84,22 110,20 140,18 180,10',
+    href: '/admin?filter=tds'
   },
   {
     id: 'active-venues',
     label: 'Active Venues',
-    value: '27',
+    value: '23',
     tone: 'green',
     delta: '+8%',
-    detail: 'vs last week',
-    sparkline: '0,30 20,28 44,24 68,20 96,22 124,18 150,14'
-  },
-  {
-    id: 'active-tds',
-    label: 'Active TDs',
-    value: '61',
-    tone: 'amber',
-    delta: '+12%',
-    detail: 'vs last week',
-    sparkline: '0,35 24,29 52,26 84,22 110,20 140,18 180,10'
+    detail: 'approved venues',
+    sparkline: '0,30 20,28 44,24 68,20 96,22 124,18 150,14',
+    href: '/admin?filter=venues'
   },
   {
     id: 'total-players',
@@ -68,30 +55,78 @@ const overviewMetrics = [
     value: '2,841',
     tone: 'violet',
     delta: '+18%',
-    detail: 'vs last week',
-    sparkline: '0,38 26,34 52,27 85,24 115,21 146,18 180,15'
+    detail: 'network IDs',
+    sparkline: '0,38 26,34 52,27 85,24 115,21 146,18 180,15',
+    href: '/admin?filter=players'
   },
   {
-    id: 'venue-channels',
-    label: 'Venue Channels',
-    value: '27 / 200',
+    id: 'live-broadcasts',
+    label: 'Live Broadcasts',
+    value: '8',
+    tone: 'red',
+    delta: '+50%',
+    detail: 'active streams',
+    sparkline: '0,32 24,27 56,18 80,22 118,12 170,16 220,9',
+    href: '/admin?filter=broadcasts'
+  },
+  {
+    id: 'live-viewers',
+    label: 'Current Viewers',
+    value: '412',
+    tone: 'blue',
+    delta: '+28%',
+    detail: 'networkwide',
+    sparkline: '0,34 20,30 45,25 68,19 92,23 120,20 150,18 180,15',
+    href: '/admin?filter=tdtv'
+  },
+  {
+    id: 'active-channels',
+    label: 'Active Channels',
+    value: '19',
     tone: 'cyan',
     delta: '+4%',
-    detail: 'capacity used',
-    sparkline: '0,35 28,33 58,29 88,23 120,20 150,16 180,12'
+    detail: 'network channels',
+    sparkline: '0,35 28,33 58,29 88,23 120,20 150,16 180,12',
+    href: '/admin?filter=channels'
+  },
+  {
+    id: 'pending-approvals',
+    label: 'Pending Approvals',
+    value: '3',
+    tone: 'amber',
+    delta: 'Action needed',
+    detail: 'TDs / venues',
+    sparkline: '0,20 40,12 80,24 120,18 160,10 180,14',
+    href: '/admin?filter=approvals'
+  },
+  {
+    id: 'subscription-issues',
+    label: 'Subscription Issues',
+    value: '2',
+    tone: 'purple',
+    delta: 'Needs review',
+    detail: 'billing exceptions',
+    sparkline: '0,18 40,20 80,32 120,26 160,16 180,20',
+    href: '/admin?filter=billing-issues'
   }
 ] as const;
 
 const adminSections = [
   { id: 'overview', label: 'Overview' },
   { id: 'people', label: 'People' },
-  { id: 'venues', label: 'Venues' },
   { id: 'tdtv', label: 'TDTV' },
-  { id: 'sponsorships', label: 'Sponsorships' },
-  { id: 'events', label: 'Events' },
+  { id: 'events', label: 'Tournaments' },
   { id: 'billing', label: 'Billing' },
   { id: 'system', label: 'System' }
 ] as const;
+
+const nestedAdminNavigation = {
+  People: ['Users', 'TDs', 'Venues', 'Players'],
+  Tournaments: ['All Tournaments', 'Live Now', 'Recent'],
+  TDTV: ['Network', 'Channels', 'Live Broadcasts'],
+  Billing: ['Subscriptions', 'Entitlements'],
+  System: ['Activity / Audit Log', 'System Health', 'Settings']
+} as const;
 
 const defaultOverviewMetrics = overviewMetrics.map((metric) => metric.id);
 
@@ -130,6 +165,10 @@ export default function AdminConsole() {
   const [venueChannelRequests, setVenueChannelRequests] = useState(() => getVenueChannelChangeRequests());
   const [systemSponsorDefaults, setSystemSponsorDefaults] = useState<BroadcastSponsorCard[]>(() => getSystemBroadcastSponsorDefaults());
   const [sponsorshipStatus, setSponsorshipStatus] = useState<string>('');
+  const [search, setSearch] = useState('');
+  const [selectedEntity, setSelectedEntity] = useState<AdminEntityRecord | null>(null);
+  const [selectedEntityTab, setSelectedEntityTab] = useState<'overview' | 'activity' | 'history' | 'related'>('overview');
+  const [auditEntries, setAuditEntries] = useState(() => getAuditLogEntries());
 
   const permissions = useMemo(() => listEffectivePermissions(currentUser), [currentUser]);
   const overviewCardSet = overviewMetrics.filter((metric) => visibleOverviewMetrics.includes(metric.id));
@@ -172,16 +211,6 @@ export default function AdminConsole() {
           { title: 'Venue access', value: String(currentUser.venueIds.length), detail: 'Associated venue records' },
           { title: 'TD profile', value: currentUser.tdProfileId ?? 'Not assigned', detail: currentUser.tdProfileId ? 'Linked TD record' : 'No TD profile attached' }
         ];
-      case 'venues': {
-        const venueChannels = allChannels.filter((channel) => channel.type === 'VENUE');
-        return venueChannels.length > 0
-          ? venueChannels.map((channel) => ({
-              title: channel.entityName,
-              value: `Channel ${channel.number}`,
-              detail: channel.status
-            }))
-          : [{ title: 'No venue records', value: 'Awaiting setup', detail: 'Create a venue to populate this pane.' }];
-      }
       case 'tdtv': {
         const tdChannels = allChannels.filter((channel) => channel.type === 'TD');
         return tdChannels.length > 0
@@ -192,11 +221,6 @@ export default function AdminConsole() {
             }))
           : [{ title: 'No TD channel records', value: 'Awaiting assignment', detail: 'TD channel data appears here when available.' }];
       }
-      case 'sponsorships':
-        return [
-          { title: 'Permanent slots', value: String(systemSponsorDefaults.length), detail: 'System-wide broadcast defaults' },
-          { title: 'Default duration', value: `${systemSponsorDefaults[0]?.durationSeconds ?? 15}s`, detail: 'Applied to new tournament sponsor configs' }
-        ];
       case 'billing':
         return [
           { title: 'Subscription tier', value: currentUser.tier, detail: 'Current plan' },
@@ -213,6 +237,45 @@ export default function AdminConsole() {
         return [];
     }
   }, [activeSection, allChannels, currentUser, permissions, systemSponsorDefaults, tournaments]);
+
+  const networkEntityDirectory = useMemo(() => {
+    const people = [
+      { name: 'Platform Admin', type: 'USER', status: 'ACTIVE', identifier: 'PA-0001', detail: 'Verified network admin identity', actions: ['Edit profile', 'Audit log', 'View activity'] },
+      ...allChannels.filter((channel) => channel.type === 'VENUE').slice(0, 3).map((channel) => ({
+        name: channel.entityName,
+        type: 'VENUE',
+        status: channel.status,
+        identifier: `Venue ${channel.number}`,
+        detail: 'Venue profile • channel assignment',
+        actions: ['Approve', 'Edit venue', 'Manage admins']
+      })),
+      ...allChannels.filter((channel) => channel.type === 'TD').slice(0, 3).map((channel) => ({
+        name: channel.entityName,
+        type: 'TD',
+        status: channel.status,
+        identifier: `TD ${channel.number}`,
+        detail: 'TD profile • broadcast access',
+        actions: ['Approve', 'Assign channel', 'View broadcasts']
+      }))
+    ];
+
+    const tdtv = allChannels.map((channel) => ({
+      name: channel.entityName,
+      type: channel.type,
+      status: channel.status,
+      identifier: `Channel ${channel.number}`,
+      detail: channel.entityType === 'TDTV' ? 'Network feed' : `${channel.entityType} ownership`,
+      actions: ['Manage assignment', 'Edit metadata', 'View activity']
+    }));
+
+    const billing = [
+      { name: 'All Subscriptions', type: 'SUBSCRIPTION', status: 'MONITORING', identifier: 'Overview', detail: 'Customer billing summary', actions: ['Review issues', 'View entitlements', 'Manage plans'] },
+      { name: 'Pro+ Subscribers', type: 'ENTITLEMENT', status: 'ACTIVE', identifier: '8 Accounts', detail: 'Broadcast + TDTV', actions: ['Adjust tier', 'Grant promo', 'Revoke grants'] },
+      { name: 'Venue Billing', type: 'SUBSCRIPTION', status: 'ACTIVE', identifier: '5 Accounts', detail: 'Venue / network operations', actions: ['Review plans', 'Check invoices', 'Approve renewals'] }
+    ];
+
+    return { people, tdtv, billing };
+  }, [allChannels]);
 
   if (!hasPermission(currentUser, 'platform.manage_users')) {
     return (
@@ -277,16 +340,121 @@ export default function AdminConsole() {
 
   const handleSaveSystemSponsorDefaults = () => {
     setSystemSponsorDefaults(saveSystemBroadcastSponsorDefaults(systemSponsorDefaults));
+    const logEntry = recordAuditAction({
+      administrator: currentUser.name || currentUser.email || 'Platform Admin',
+      action: 'System-wide sponsorship defaults updated',
+      entity: 'Broadcast Sponsorship Defaults',
+      previousValue: 'Existing defaults',
+      newValue: 'Updated system sponsor defaults'
+    });
+    setAuditEntries((current) => [logEntry, ...current].slice(0, 12));
     setSponsorshipStatus('System-wide sponsorship defaults updated.');
   };
 
   const handleVenueChannelDecision = (requestId: string, decision: 'APPROVED' | 'DENIED') => {
     try {
+      const matchingRequest = venueChannelRequests.find((request) => request.id === requestId);
+      const previousValue = matchingRequest?.status ?? 'PENDING';
       resolveVenueChannelChangeRequest(requestId, decision, currentUser.name || currentUser.email || 'Platform Admin');
+      const logEntry = recordAuditAction({
+        administrator: currentUser.name || currentUser.email || 'Platform Admin',
+        action: `Venue channel request ${decision.toLowerCase()}`,
+        entity: matchingRequest?.venueName ?? 'Venue Request',
+        previousValue,
+        newValue: decision
+      });
+      setAuditEntries((current) => [logEntry, ...current].slice(0, 12));
       refreshAdminData();
     } catch (decisionError) {
       window.alert(decisionError instanceof Error ? decisionError.message : 'Unable to process venue channel request.');
     }
+  };
+
+  const adminEntityCatalog = useMemo<AdminEntityRecord[]>(() => {
+    const channelEntities: AdminEntityRecord[] = allChannels.map((channel) => ({
+      id: channel.id,
+      name: channel.entityName,
+      type: 'CHANNEL',
+      group: 'tdtv',
+      status: channel.status,
+      identifier: `Channel ${channel.number}`,
+      detail: `${channel.type} • ${channel.entityType}`,
+      actions: ['Manage Assignment', 'Edit Metadata', 'View Activity']
+    }));
+
+    const tournamentEntities: AdminEntityRecord[] = tournaments.map((tournament) => ({
+      id: tournament.id,
+      name: tournament.name,
+      type: 'TOURNAMENT',
+      group: 'events',
+      status: tournament.status,
+      identifier: tournament.format,
+      detail: `${tournament.players.length} players • ${tournament.tableCount} tables`,
+      actions: ['Open Tournament', 'View Bracket', 'Broadcasts']
+    }));
+
+    return [
+      ...channelEntities,
+      ...tournamentEntities,
+      {
+        id: 'entity-network-overview',
+        name: 'TDIAB Network',
+        type: 'CHANNEL',
+        group: 'tdtv',
+        status: 'ACTIVE',
+        identifier: 'Network 0',
+        detail: 'Network operations and system overview',
+        actions: ['Overview', 'Activity', 'Health']
+      },
+      {
+        id: 'entity-td-ops',
+        name: "Ace's Tournaments",
+        type: 'TD',
+        group: 'people',
+        status: 'ACTIVE',
+        identifier: 'TD-1247',
+        detail: 'TD profile • Pro+ • Channel 1247',
+        actions: ['Approve', 'Assign Channel', 'View Broadcasts']
+      },
+      {
+        id: 'entity-venue-parlor',
+        name: 'Parlor Room',
+        type: 'VENUE',
+        group: 'people',
+        status: 'ACTIVE',
+        identifier: 'Venue 17',
+        detail: 'Venue profile • Active • Channel 17',
+        actions: ['Approve', 'Manage Admins', 'View Tournaments']
+      },
+      {
+        id: 'entity-player-18427',
+        name: 'John Smith',
+        type: 'PLAYER',
+        group: 'people',
+        status: 'ACTIVE',
+        identifier: 'Universal ID #18427',
+        detail: 'Player profile • Tournament history',
+        actions: ['View Profile', 'History', 'Merge Records']
+      }
+    ];
+  }, [allChannels, tournaments]);
+
+  const filteredSearchResults = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return [];
+
+    return adminEntityCatalog.filter((entity) => {
+      const haystack = [entity.name, entity.identifier, entity.detail, entity.type, entity.status].join(' ').toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [adminEntityCatalog, search]);
+
+  const handleEntitySelect = (entity: AdminEntityRecord) => {
+    setSelectedEntity(entity);
+    setSearch("");
+    if (entity.group === 'tdtv') setActiveSection('tdtv');
+    else if (entity.group === 'events') setActiveSection('events');
+    else setActiveSection('people');
   };
 
   return (
@@ -294,24 +462,34 @@ export default function AdminConsole() {
       <aside className="admin-console__sidebar">
         <div className="brand-block">
           <div className="brand-mark">TD<span>IAB</span></div>
-          <span className="mini-label">ADMIN CONSOLE</span>
+          <span className="mini-label">NETWORK COMMAND</span>
         </div>
 
         <div className="admin-console__sidebar-meta">
-          <span className="sidebar-security-pill">Verified access only</span>
-          <p>Platform controls are isolated from customer workflows and gated behind the verified admin account.</p>
+          <span className="sidebar-security-pill">Platform Admin</span>
+          <p>Verified administrative authority across the TDIAB network, venue operations, and channel system.</p>
         </div>
 
         <nav className="admin-console__nav" aria-label="Admin navigation">
           {adminSections.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              className={`admin-nav-item ${activeSection === section.id ? 'is-active' : ''}`}
-              onClick={() => setActiveSection(section.id)}
-            >
-              {section.label}
-            </button>
+            <div key={section.id} className="admin-nav-group">
+              <button
+                type="button"
+                className={`admin-nav-item ${activeSection === section.id ? 'is-active' : ''}`}
+                onClick={() => setActiveSection(section.id)}
+              >
+                {section.label}
+              </button>
+              {section.id === 'people' || section.id === 'events' || section.id === 'tdtv' || section.id === 'billing' || section.id === 'system' ? (
+                <div className="admin-subnav">
+                  {nestedAdminNavigation[section.label as keyof typeof nestedAdminNavigation].map((item) => (
+                    <button key={`${section.id}-${item}`} type="button" className="admin-subnav-item">
+                      {item}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           ))}
         </nav>
 
@@ -326,7 +504,7 @@ export default function AdminConsole() {
           </div>
           <div>
             <span>Role</span>
-            <strong>{currentUser.role}</strong>
+            <strong>PA</strong>
           </div>
         </div>
       </aside>
@@ -334,18 +512,169 @@ export default function AdminConsole() {
       <main className="admin-console__content">
         <header className="admin-console__topbar">
           <div className="admin-console__topbar-meta">
-            <span className="eyebrow">Operational overview</span>
+            <span className="eyebrow">Network operations</span>
             <h1>Platform Admin</h1>
           </div>
           <div className="admin-console__topbar-actions">
             <span className="topbar-date">{new Date().toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
             <button type="button" className="topbar-icon" aria-label="notifications">{pendingVenueChannelRequests.length}</button>
-            <div className="topbar-user">
-              <span className="topbar-user__avatar">{currentUser.name.slice(0, 2).toUpperCase() || 'AA'}</span>
+            <div className="topbar-user" title="Platform Administrator — Full access to TDIAB network management.">
+              <span className="topbar-user__avatar">🔒</span>
               <span>{currentUser.name || 'Admin'}</span>
             </div>
           </div>
         </header>
+
+        <div className="admin-console__toolbar">
+          <div className="admin-console__search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              type="text"
+              placeholder="Search network entities..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          <button type="button" className="ghost-btn ghost-btn--compact" onClick={refreshAdminData}>Refresh</button>
+        </div>
+
+        {search.trim() && filteredSearchResults.length > 0 && (
+          <div className="admin-console__search-results">
+            {filteredSearchResults.map((result) => (
+              <button key={`${result.type}-${result.id}`} type="button" className="admin-search-result" onClick={() => handleEntitySelect(result)}>
+                <div>
+                  <strong>{result.name}</strong>
+                  <small>{result.identifier} • {result.detail}</small>
+                </div>
+                <span>{result.type}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {selectedEntity && (
+          <div className="admin-console__entity-detail">
+            <div className="admin-console__entity-header">
+              <div>
+                <span className="eyebrow">{selectedEntity.type}</span>
+                <h3>{selectedEntity.name}</h3>
+              </div>
+              <span className="admin-entity-status">{selectedEntity.status}</span>
+            </div>
+            <div className="admin-console__entity-meta">
+              <span>{selectedEntity.identifier}</span>
+              <span>{selectedEntity.detail}</span>
+            </div>
+            <div className="admin-console__entity-actions">
+              {selectedEntity.actions.map((action) => (
+                <button key={`${selectedEntity.id}-${action}`} type="button" className="ghost-btn ghost-btn--small">
+                  {action}
+                </button>
+              ))}
+            </div>
+            <div className="admin-console__entity-tabs" role="tablist" aria-label={`${selectedEntity.name} detail tabs`}>
+              {(['overview', 'activity', 'history', 'related'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedEntityTab === tab}
+                  className={`admin-entity-tab ${selectedEntityTab === tab ? 'is-active' : ''}`}
+                  onClick={() => setSelectedEntityTab(tab)}
+                >
+                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                </button>
+              ))}
+            </div>
+
+            {selectedEntityTab === 'overview' && (
+              <div className="admin-console__entity-panels">
+                <article className="admin-panel-card">
+                  <span className="admin-panel-card__label">Overview</span>
+                  <strong>{selectedEntity.name}</strong>
+                  <small>{selectedEntity.identifier}</small>
+                </article>
+                <article className="admin-panel-card">
+                  <span className="admin-panel-card__label">Status</span>
+                  <strong>{selectedEntity.status}</strong>
+                  <small>Current administrative state</small>
+                </article>
+                <article className="admin-panel-card">
+                  <span className="admin-panel-card__label">Context</span>
+                  <strong>{selectedEntity.type}</strong>
+                  <small>{selectedEntity.detail}</small>
+                </article>
+              </div>
+            )}
+
+            {selectedEntityTab === 'activity' && (
+              <div className="admin-entity-panel-body">
+                <div className="admin-entity-activity-list">
+                  <div><strong>Live</strong><span>{selectedEntity.status}</span></div>
+                  <div><strong>Recent activity</strong><span>{selectedEntity.detail}</span></div>
+                  <div><strong>Network health</strong><span>Monitoring active</span></div>
+                </div>
+              </div>
+            )}
+
+            {selectedEntityTab === 'history' && (
+              <div className="admin-entity-panel-body">
+                <div className="admin-entity-activity-list">
+                  <div><strong>Lifecycle</strong><span>{selectedEntity.status}</span></div>
+                  <div><strong>Last update</strong><span>{new Date().toLocaleString()}</span></div>
+                  <div><strong>Related log</strong><span>Audit entries available in System</span></div>
+                </div>
+              </div>
+            )}
+
+            {selectedEntityTab === 'related' && (
+              <div className="admin-entity-panel-body">
+                <div className="admin-entity-activity-list">
+                  <div><strong>Related records</strong><span>{selectedEntity.actions.join(', ')}</span></div>
+                  <div><strong>Contextual actions</strong><span>{selectedEntity.identifier}</span></div>
+                  <div><strong>Next step</strong><span>{selectedEntity.group === 'people' ? 'People management' : selectedEntity.group === 'tdtv' ? 'TDTV management' : 'Tournament operations'}</span></div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeSection === 'system' && (
+          <section className="admin-audit-panel">
+            <div className="admin-audit-panel__head">
+              <div>
+                <span className="eyebrow">System activity</span>
+                <h3>Audit Log</h3>
+              </div>
+              <button type="button" className="ghost-btn ghost-btn--compact" onClick={() => setAuditEntries(getAuditLogEntries())}>Refresh</button>
+            </div>
+            <div className="admin-audit-list">
+              {auditEntries.length === 0 ? (
+                <div className="admin-empty-state">
+                  <h3>No admin actions recorded yet</h3>
+                  <p>Network changes will appear here with administrator, entity, and timestamp metadata.</p>
+                </div>
+              ) : (
+                auditEntries.map((entry) => (
+                  <article key={entry.id} className="admin-audit-entry">
+                    <div className="admin-audit-entry__meta">
+                      <strong>{entry.action}</strong>
+                      <small>{new Date(entry.timestamp).toLocaleString()}</small>
+                    </div>
+                    <div className="admin-audit-entry__body">
+                      <span>{entry.administrator}</span>
+                      <span>{entry.entity}</span>
+                    </div>
+                    <div className="admin-audit-entry__diff">
+                      <span>Previous: {entry.previousValue ?? '—'}</span>
+                      <span>New: {entry.newValue ?? '—'}</span>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        )}
 
         <div className="admin-console__workspace">
           <div className="admin-console__pane-header">
@@ -381,7 +710,6 @@ export default function AdminConsole() {
                   )}
                 </div>
               )}
-              <button type="button" className="ghost-btn ghost-btn--compact" onClick={refreshAdminData}>Refresh</button>
             </div>
           </div>
 
@@ -389,7 +717,7 @@ export default function AdminConsole() {
             <>
               <section className="metric-grid">
                 {overviewCardSet.map((metric) => (
-                  <div key={metric.id} className={`metric-card metric-card--${metric.tone}`}>
+                  <button key={metric.id} type="button" className={`metric-card metric-card--${metric.tone}`} onClick={() => setSearch(metric.label)}>
                     <div className="metric-card__header">
                       <span className="metric-card__icon">◉</span>
                       <span>{metric.label}</span>
@@ -406,7 +734,7 @@ export default function AdminConsole() {
                     <svg className="sparkline" viewBox="0 0 180 40" preserveAspectRatio="none" aria-hidden="true">
                       <polyline points={metric.sparkline} />
                     </svg>
-                  </div>
+                  </button>
                 ))}
               </section>
 
@@ -417,7 +745,7 @@ export default function AdminConsole() {
                 </div>
               )}
             </>
-          ) : activeSection === 'sponsorships' ? (
+          ) : activeSection === 'system' ? (
             <div className="admin-sponsorship-layout">
               <div className="admin-panel-grid">
                 {sectionData.map((item) => (
@@ -488,6 +816,69 @@ export default function AdminConsole() {
                 </div>
               </section>
             </div>
+          ) : activeSection === 'people' ? (
+            <div className="admin-panel-grid">
+              {networkEntityDirectory.people.map((item) => (
+                <article key={`${activeSection}-${item.name}`} className="admin-panel-card">
+                  <span className="admin-panel-card__label">{item.type}</span>
+                  <strong>{item.name}</strong>
+                  <small>{item.identifier}</small>
+                  <div className="admin-panel-card__footer">
+                    <span className="admin-entity-status admin-entity-status--small">{item.status}</span>
+                    <p>{item.detail}</p>
+                  </div>
+                  <div className="admin-panel-card__actions">
+                    {item.actions.map((action) => (
+                      <button key={`${item.name}-${action}`} type="button" className="ghost-btn ghost-btn--small">
+                        {action}
+                      </button>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : activeSection === 'tdtv' ? (
+            <div className="admin-panel-grid">
+              {networkEntityDirectory.tdtv.map((item) => (
+                <article key={`${activeSection}-${item.name}-${item.identifier}`} className="admin-panel-card">
+                  <span className="admin-panel-card__label">{item.type}</span>
+                  <strong>{item.name}</strong>
+                  <small>{item.identifier}</small>
+                  <div className="admin-panel-card__footer">
+                    <span className="admin-entity-status admin-entity-status--small">{item.status}</span>
+                    <p>{item.detail}</p>
+                  </div>
+                  <div className="admin-panel-card__actions">
+                    {item.actions.map((action) => (
+                      <button key={`${item.name}-${action}`} type="button" className="ghost-btn ghost-btn--small">
+                        {action}
+                      </button>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : activeSection === 'billing' ? (
+            <div className="admin-panel-grid">
+              {networkEntityDirectory.billing.map((item) => (
+                <article key={`${activeSection}-${item.name}`} className="admin-panel-card">
+                  <span className="admin-panel-card__label">{item.type}</span>
+                  <strong>{item.name}</strong>
+                  <small>{item.identifier}</small>
+                  <div className="admin-panel-card__footer">
+                    <span className="admin-entity-status admin-entity-status--small">{item.status}</span>
+                    <p>{item.detail}</p>
+                  </div>
+                  <div className="admin-panel-card__actions">
+                    {item.actions.map((action) => (
+                      <button key={`${item.name}-${action}`} type="button" className="ghost-btn ghost-btn--small">
+                        {action}
+                      </button>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
           ) : activeSection === 'events' ? (
             eventGuideItems.length === 0 ? (
               <div className="admin-empty-state">
@@ -497,7 +888,7 @@ export default function AdminConsole() {
             ) : (
               <section className="event-guide-panel">
                 <div className="event-guide-head">
-                  <span className="eyebrow">Movie Guide View</span>
+                  <span className="eyebrow">Network event guide</span>
                   <p>Track what is setting up, queued, live, and completed at a glance.</p>
                 </div>
                 <div className="event-guide-list">

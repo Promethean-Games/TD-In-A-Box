@@ -243,7 +243,17 @@ export default function AccountPage() {
             <div className="account-row">
               <div className="account-field">
                 <label>Role</label>
-                <div className="value">{getUserRoleLabel(user)}</div>
+                <div className="value">
+                  {isPlatformAdmin ? (
+                    <span className="admin-identity-pill" title="Platform Administrator — Full access to TDIAB network management.">
+                      <span aria-hidden="true">🔒</span>
+                      PLATFORM ADMIN
+                      <span aria-hidden="true">✓</span>
+                    </span>
+                  ) : (
+                    getUserRoleLabel(user)
+                  )}
+                </div>
               </div>
               <div className="account-field">
                 <label>Status</label>

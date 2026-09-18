@@ -14,6 +14,18 @@ import {
 export type UserRole = 'PLATFORM_ADMIN' | 'VENUE_ADMIN' | 'TD' | 'USER';
 export type AccountStatus = 'ACTIVE' | 'INACTIVE' | 'SUSPENDED';
 export type PermissionName =
+  | 'admin.users.manage'
+  | 'admin.tds.manage'
+  | 'admin.venues.manage'
+  | 'admin.channels.manage'
+  | 'admin.tournaments.manage'
+  | 'admin.broadcasts.manage'
+  | 'admin.players.manage'
+  | 'admin.billing.manage'
+  | 'admin.entitlements.manage'
+  | 'admin.network.manage'
+  | 'admin.analytics.view'
+  | 'admin.system.manage'
   | 'platform.manage_users'
   | 'platform.manage_venues'
   | 'platform.manage_channels'
@@ -66,6 +78,18 @@ export interface AuthSignUpResult {
 
 export const ROLE_PERMISSIONS: Record<UserRole, PermissionName[]> = {
   PLATFORM_ADMIN: [
+    'admin.users.manage',
+    'admin.tds.manage',
+    'admin.venues.manage',
+    'admin.channels.manage',
+    'admin.tournaments.manage',
+    'admin.broadcasts.manage',
+    'admin.players.manage',
+    'admin.billing.manage',
+    'admin.entitlements.manage',
+    'admin.network.manage',
+    'admin.analytics.view',
+    'admin.system.manage',
     'platform.manage_users',
     'platform.manage_venues',
     'platform.manage_channels',
@@ -97,6 +121,18 @@ export const ROLE_PERMISSIONS: Record<UserRole, PermissionName[]> = {
 };
 
 export const PERMISSION_DESCRIPTIONS: Record<PermissionName, string> = {
+  'admin.users.manage': 'Manage platform users and identity records',
+  'admin.tds.manage': 'Manage all TD lifecycle actions and assignments',
+  'admin.venues.manage': 'Create, approve, suspend, and administer venues',
+  'admin.channels.manage': 'Create, assign, suspend, and retire channels',
+  'admin.tournaments.manage': 'Manage tournament operations across the network',
+  'admin.broadcasts.manage': 'Manage live broadcast health and interventions',
+  'admin.players.manage': 'Manage player records, merges, and corrections',
+  'admin.billing.manage': 'Manage billing and subscription operations',
+  'admin.entitlements.manage': 'Grant and revoke entitlements and access overrides',
+  'admin.network.manage': 'Manage network-wide admin operations and controls',
+  'admin.analytics.view': 'Access network monitoring and operational analytics',
+  'admin.system.manage': 'Manage system settings, audit activity, and platform health',
   'platform.manage_users': 'Manage platform users and account status',
   'platform.manage_venues': 'Create, approve, and suspend venues',
   'platform.manage_channels': 'Create and administer channel registry assignments',
@@ -130,6 +166,18 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionName, string> = {
 };
 
 const PERMISSION_ENTITLEMENTS: Partial<Record<PermissionName, EntitlementId>> = {
+  'admin.users.manage': 'internal.full_access',
+  'admin.tds.manage': 'internal.full_access',
+  'admin.venues.manage': 'internal.full_access',
+  'admin.channels.manage': 'internal.full_access',
+  'admin.tournaments.manage': 'internal.full_access',
+  'admin.broadcasts.manage': 'internal.full_access',
+  'admin.players.manage': 'internal.full_access',
+  'admin.billing.manage': 'internal.full_access',
+  'admin.entitlements.manage': 'internal.full_access',
+  'admin.network.manage': 'internal.full_access',
+  'admin.analytics.view': 'internal.full_access',
+  'admin.system.manage': 'internal.full_access',
   'venue.view': 'venue.administration',
   'venue.edit': 'venue.administration',
   'venue.manage_devices': 'broadcast.venue_network',
@@ -178,7 +226,12 @@ const DEFAULT_USER: AppUser = {
   permissions: []
 };
 
-const PLATFORM_ADMIN_EMAILS = ['info@promethean-games.com'];
+export const PLATFORM_ADMIN_EMAIL = (import.meta.env.VITE_PLATFORM_ADMIN_EMAIL ?? 'info@promethean-games.com').trim().toLowerCase();
+const PLATFORM_ADMIN_EMAILS = [PLATFORM_ADMIN_EMAIL].filter(Boolean);
+
+export function isAuthorizedPlatformAdminEmail(email: string | null | undefined): boolean {
+  return typeof email === 'string' && email.trim().toLowerCase() === PLATFORM_ADMIN_EMAIL;
+}
 
 function isValidRole(value: unknown): value is UserRole {
   return value === 'PLATFORM_ADMIN' || value === 'VENUE_ADMIN' || value === 'TD' || value === 'USER';
@@ -203,10 +256,15 @@ function normalizePermissions(value: unknown, role: UserRole): PermissionName[] 
 }
 
 function applyPlatformAdminOverrides(user: AppUser): AppUser {
-  if (user.role !== 'PLATFORM_ADMIN') {
+  const isAuthorizedAdmin = isAuthorizedPlatformAdminEmail(user.email);
+  if (user.role !== 'PLATFORM_ADMIN' || !isAuthorizedAdmin) {
+    const normalizedRole = user.role === 'PLATFORM_ADMIN' && !isAuthorizedAdmin ? 'USER' : user.role;
     return {
       ...user,
-      permissions: normalizePermissions(user.permissions, user.role)
+      role: normalizedRole,
+      status: normalizedRole === 'USER' ? user.status : user.status,
+      verified: normalizedRole === 'USER' ? user.verified : user.verified,
+      permissions: normalizePermissions(user.permissions, normalizedRole)
     };
   }
 
@@ -248,7 +306,7 @@ function mapSupabaseUser(user: SupabaseUser): AppUser {
   const appMetadata = user.app_metadata ?? {};
   const userMetadata = user.user_metadata ?? {};
   const email = user.email ?? '';
-  const isPlatformAdminUser = PLATFORM_ADMIN_EMAILS.includes(email.toLowerCase());
+  const isPlatformAdminUser = isAuthorizedPlatformAdminEmail(email);
   const role = isPlatformAdminUser ? 'PLATFORM_ADMIN' : isValidRole(appMetadata.role) ? appMetadata.role : 'USER';
 
   return applyPlatformAdminOverrides({
@@ -383,7 +441,8 @@ export function isProPlusTd(user: AppUser | null | undefined): boolean {
 }
 
 export function getUserTierLabel(user: AppUser | null | undefined): string {
-  if (user?.role === 'PLATFORM_ADMIN') return 'Platform Admin';
+  if (user?.role === 'PLATFORM_ADMIN' && isAuthorizedPlatformAdminEmail(user.email)) return 'PLATFORM ADMIN';
+  if (user?.role === 'PLATFORM_ADMIN' && !isAuthorizedPlatformAdminEmail(user.email)) return 'BASIC';
   return (user?.tier ?? 'BASIC').replace('_', '+');
 }
 
