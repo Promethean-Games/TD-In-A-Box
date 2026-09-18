@@ -20,11 +20,30 @@ export default function CameraSender() {
   const streamRef = useRef<MediaStream | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const signalClientRef = useRef<PairSignalClient | null>(null);
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+
+  const flushPendingIceCandidates = async (peer: RTCPeerConnection) => {
+    if (pendingIceCandidatesRef.current.length === 0) return;
+    const queuedCandidates = [...pendingIceCandidatesRef.current];
+    pendingIceCandidatesRef.current = [];
+
+    for (const candidate of queuedCandidates) {
+      try {
+        await peer.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch {
+        pendingIceCandidatesRef.current.push(candidate);
+      }
+    }
+  };
 
   const stopSession = async () => {
     const signalClient = signalClientRef.current;
     if (signalClient) {
-      await signalClient.send({ type: 'stop', from: 'sender', ts: Date.now() });
+      try {
+        await signalClient.send({ type: 'stop', from: 'sender', ts: Date.now() });
+      } catch {
+        // ignore teardown signal errors while closing the session
+      }
       signalClient.close();
       signalClientRef.current = null;
     }
@@ -41,6 +60,7 @@ export default function CameraSender() {
     if (previewRef.current) {
       previewRef.current.srcObject = null;
     }
+    pendingIceCandidatesRef.current = [];
     setIsConnected(false);
     setStatus('Disconnected');
   };
@@ -67,10 +87,16 @@ export default function CameraSender() {
         await peer.setLocalDescription(answer);
         await signalClient.send({ type: 'answer', from: 'sender', payload: answer, ts: Date.now() });
         setStatus('Answer sent. Finishing connection...');
+        await flushPendingIceCandidates(peer);
         return;
       }
       if (message.type === 'ice' && message.payload) {
-        await peer.addIceCandidate(message.payload as RTCIceCandidateInit);
+        const candidate = message.payload as RTCIceCandidateInit;
+        if (peer.remoteDescription) {
+          await peer.addIceCandidate(new RTCIceCandidate(candidate));
+        } else {
+          pendingIceCandidatesRef.current.push(candidate);
+        }
         return;
       }
       if (message.type === 'stop') {
@@ -138,8 +164,25 @@ export default function CameraSender() {
           setStatus(`Connection ${peer.connectionState}`);
         }
       };
+      peer.onnegotiationneeded = () => {
+        // wait for host to send the offer; sender completes negotiation when it arrives
+      };
 
-      await signalClient.send({ type: 'ready', from: 'sender', ts: Date.now() });
+      const sendReadySignal = async (attempt: number) => {
+        try {
+          await signalClient.send({ type: 'ready', from: 'sender', ts: Date.now() });
+        } catch {
+          // silent retry on transport issues
+        }
+
+        if (attempt < 3) {
+          window.setTimeout(() => {
+            void sendReadySignal(attempt + 1);
+          }, 1200);
+        }
+      };
+
+      await sendReadySignal(1);
       setStatus('Camera ready. Waiting for host offer...');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to start camera sender session.');

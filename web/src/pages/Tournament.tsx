@@ -149,6 +149,7 @@ export default function Tournament() {
   const activeCameraStreamRef = useRef<MediaStream | null>(null);
   const pairSignalClientRef = useRef<PairSignalClient | null>(null);
   const pairPeerRef = useRef<RTCPeerConnection | null>(null);
+  const pendingIncomingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const matchCarouselTrackRef = useRef<HTMLDivElement | null>(null);
   const matchCarouselCardRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const matchCarouselFrameRef = useRef<number | null>(null);
@@ -357,14 +358,24 @@ export default function Tournament() {
       return;
     }
 
+    if (cameraInputMode === 'USB') {
+      const preferredCamera =
+        broadcastConfig.cameraList.find((camera) => camera.id === broadcastConfig.cameraId && (camera.type === 'USB' || camera.type === 'OBS')) ??
+        broadcastConfig.cameraList.find((camera) => camera.type === 'USB' || camera.type === 'OBS') ??
+        broadcastConfig.cameraList[0];
+      if (!preferredCamera) return;
+      if (!cameraSourceId) setCameraSourceId(preferredCamera.id);
+      if (broadcastConfig.cameraId && broadcastConfig.cameraId === preferredCamera.id) {
+        setCameraConnectionState('CONNECTED');
+      }
+      return;
+    }
+
     const preferredCamera =
       broadcastConfig.cameraList.find((camera) => camera.id === broadcastConfig.cameraId) ??
       broadcastConfig.cameraList.find((camera) => camera.type === 'USB' || camera.type === 'OBS') ??
       broadcastConfig.cameraList[0];
     if (!preferredCamera) return;
-    if (broadcastConfig.cameraId && broadcastConfig.cameraId === preferredCamera.id) {
-      setCameraConnectionState('CONNECTED');
-    }
     if (!cameraSourceId) setCameraSourceId(preferredCamera.id);
   }, [broadcastConfig.cameraId, broadcastConfig.cameraList, broadcastConfig.connectedCameraIds, cameraInputMode, cameraSourceId, canUseNetworkCamera, canUseUsbCamera]);
   useEffect(() => {
@@ -881,6 +892,7 @@ export default function Tournament() {
       pairPeerRef.current = null;
     }
 
+    pendingIncomingIceCandidatesRef.current = [];
     setCameraPairCode('');
     setCameraPairStatus('Not paired');
     setSignalTransport(null);
@@ -910,12 +922,29 @@ export default function Tournament() {
           return;
         }
         await peer.setRemoteDescription(new RTCSessionDescription(answer));
+        for (const candidate of pendingIncomingIceCandidatesRef.current) {
+          try {
+            await peer.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch {
+            // retry later if the answer has not fully settled yet
+          }
+        }
+        pendingIncomingIceCandidatesRef.current = [];
         setCameraConnectionState('CONNECTED');
         setCameraPairStatus('Remote camera linked.');
         return;
       }
       if (message.type === 'ice' && message.payload) {
-        await peer.addIceCandidate(message.payload as RTCIceCandidateInit);
+        const candidate = message.payload as RTCIceCandidateInit;
+        if (peer.remoteDescription) {
+          try {
+            await peer.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch {
+            pendingIncomingIceCandidatesRef.current.push(candidate);
+          }
+        } else {
+          pendingIncomingIceCandidatesRef.current.push(candidate);
+        }
         return;
       }
       if (message.type === 'stop') {
@@ -983,8 +1012,12 @@ export default function Tournament() {
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === 'connected') {
           setCameraPairStatus('Paired and streaming.');
+          setCameraConnectionState('CONNECTED');
+          setCameraStatusNote('Remote camera connected and streaming.');
         } else if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
           setCameraPairStatus(`Pairing ${peer.connectionState}.`);
+          setCameraConnectionState('DISCONNECTED');
+          setCameraStatusNote('Remote camera connection stalled. Try reconnecting.');
         }
       };
 
@@ -1212,14 +1245,23 @@ export default function Tournament() {
     }
     if (!selectedBroadcastChannel) return;
 
+    const scheduleState = currentTournament?.date ? (() => {
+      const startsAt = new Date(currentTournament.date);
+      return Number.isNaN(startsAt.getTime()) ? null : { startsAt, isComingSoon: Date.now() < startsAt.getTime() };
+    })() : null;
+
     updateBroadcastConfig((current) => ({
       ...current,
-      streamStatus: 'LIVE',
+      streamStatus: scheduleState?.isComingSoon ? 'UP_NEXT' : 'LIVE',
       cameraId: selectedCameraSource?.id ?? current.cameraId
     }));
     setCameraError(null);
     setIsGoLiveConfirmOpen(false);
-    setCameraStatusNote(`Live on ${formatChannelOptionLabel(selectedBroadcastChannel)}.`);
+    setCameraStatusNote(
+      scheduleState?.isComingSoon
+        ? `Broadcast armed for ${formatChannelOptionLabel(selectedBroadcastChannel)}. Coming soon overlay will stay active until start time.`
+        : `Live on ${formatChannelOptionLabel(selectedBroadcastChannel)}.`
+    );
   };
 
   const handleStandbyBroadcast = () => {

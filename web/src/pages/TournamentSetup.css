@@ -45,7 +45,7 @@
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 22px;
   padding: 24px 18px 18px;
-  max-width: 760px;
+  max-width: 920px;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 24px 60px rgba(0,0,0,0.35);
 }
 
@@ -73,9 +73,16 @@
 
 .field-label-row {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
-  width: fit-content;
+  width: 100%;
+  line-height: 1.35;
+}
+
+.field-label-row > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .field-hint-wrap {
@@ -156,26 +163,28 @@
   align-items: center;
   gap: 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.03);
   color: white;
-  padding: 14px 16px;
+  padding: 18px 18px;
   text-align: left;
   cursor: pointer;
+  min-height: 72px;
 }
 
 .format-accordion-copy {
   display: grid;
-  gap: 3px;
+  gap: 4px;
+  min-width: 0;
 }
 
 .format-accordion-copy strong {
-  font-size: 1rem;
+  font-size: 1.1rem;
 }
 
 .format-accordion-copy small {
   color: rgba(255, 255, 255, 0.7);
-  font-size: 0.8rem;
+  font-size: 0.82rem;
 }
 
 .format-accordion-chevron {
@@ -191,13 +200,17 @@
 
 .inline-field-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
   margin-top: 8px;
 }
 
 .form-group.compact {
   margin: 0;
+}
+
+.form-group.compact .field-label-row {
+  min-height: 38px;
 }
 
 .prize-pool-preview {
@@ -207,7 +220,7 @@
   justify-content: space-between;
   gap: 10px;
   margin-top: 14px;
-  padding: 14px 16px;
+  padding: 18px 16px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.035);
@@ -221,13 +234,16 @@
 }
 
 .prize-pool-preview strong {
-  font-size: clamp(1.2rem, 3vw, 1.9rem);
+  font-size: clamp(1.4rem, 3vw, 2.2rem);
   color: #f7fafc;
+  font-weight: 800;
+  letter-spacing: -0.04em;
 }
 
 .prize-pool-preview small {
   flex-basis: 100%;
   color: rgba(255, 255, 255, 0.68);
+  line-height: 1.5;
 }
 
 .template-toggle-row {
@@ -301,7 +317,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
+  gap: 6px;
   text-align: left;
   padding: 18px 18px 16px;
   border-radius: 12px;
@@ -309,6 +325,7 @@
   color: white;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  min-height: 82px;
 }
 
 .format-tile:hover {
@@ -435,6 +452,7 @@
   font-weight: 700;
   cursor: pointer;
   transition: transform 0.15s ease, opacity 0.15s ease;
+  min-height: 52px;
 }
 
 .primary-btn {
@@ -476,16 +494,21 @@
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 760px) {
+  .setup-container {
+    width: min(100%, 640px);
+  }
+
   .setup-title {
-    font-size: 2.6rem;
+    font-size: 2.5rem;
   }
 
   .inline-field-grid {
     grid-template-columns: 1fr;
   }
 
-  .race-input-grid {
+  .race-input-grid,
+  .race-input-grid--shift {
     grid-template-columns: 1fr;
   }
 

@@ -32,8 +32,10 @@ export async function createPairSignalClient(
   sessionId: string,
   onMessage: (message: PairSignalMessage) => void
 ): Promise<PairSignalClient> {
+  const signalSessionKey = `webrtc-pair-${sessionId}`;
+
   if (isSupabaseConfigured && supabase) {
-    const channel = supabase.channel(`webrtc-pair-${sessionId}`, {
+    const channel = supabase.channel(signalSessionKey, {
       config: { broadcast: { self: true } }
     });
 
@@ -43,24 +45,73 @@ export async function createPairSignalClient(
       onMessage(message);
     });
 
-    await channel.subscribe();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const waitForConnection = setTimeout(() => {
+          reject(new Error('Timed out waiting for Supabase signaling.'));
+        }, 7000);
 
-    return {
-      transport: 'supabase',
-      send: async (message) => {
-        await channel.send({
-          type: 'broadcast',
-          event: 'signal',
-          payload: message
+        channel.subscribe((status, error) => {
+          if (status === 'SUBSCRIBED') {
+            clearTimeout(waitForConnection);
+            resolve();
+            return;
+          }
+
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || error) {
+            clearTimeout(waitForConnection);
+            reject(error ?? new Error('Signal channel failed to connect.'));
+          }
         });
-      },
-      close: () => {
+      });
+
+      return {
+        transport: 'supabase',
+        send: async (message) => {
+          await channel.send({
+            type: 'broadcast',
+            event: 'signal',
+            payload: message
+          });
+        },
+        close: () => {
+          void channel.unsubscribe();
+        }
+      };
+    } catch (error) {
+      try {
         void channel.unsubscribe();
+      } catch {
+        // ignore cleanup errors while falling back
       }
-    };
+
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const fallback = new BroadcastChannel(signalSessionKey);
+        fallback.onmessage = (event: MessageEvent<PairSignalMessage>) => {
+          if (!event?.data || typeof event.data.type !== 'string') return;
+          onMessage(event.data);
+        };
+
+        return {
+          transport: 'broadcast-channel',
+          send: async (message) => {
+            fallback.postMessage(message);
+          },
+          close: () => {
+            fallback.close();
+          }
+        };
+      }
+
+      throw error;
+    }
   }
 
-  const fallback = new BroadcastChannel(`webrtc-pair-${sessionId}`);
+  if (typeof window === 'undefined' || !('BroadcastChannel' in window)) {
+    throw new Error('WebRTC signaling is unavailable in this browser.');
+  }
+
+  const fallback = new BroadcastChannel(signalSessionKey);
   fallback.onmessage = (event: MessageEvent<PairSignalMessage>) => {
     if (!event?.data || typeof event.data.type !== 'string') return;
     onMessage(event.data);

@@ -345,6 +345,22 @@ export function getTdtvLobbySlides(tournaments: Tournament[]): TdtvLoopSlide[] {
   ];
 }
 
+export function getTournamentScheduleState(tournament: Tournament): { startsAt: Date | null; isComingSoon: boolean } {
+  if (!tournament?.date) {
+    return { startsAt: null, isComingSoon: false };
+  }
+
+  const startsAt = new Date(tournament.date);
+  if (Number.isNaN(startsAt.getTime())) {
+    return { startsAt: null, isComingSoon: false };
+  }
+
+  return {
+    startsAt,
+    isComingSoon: Date.now() < startsAt.getTime()
+  };
+}
+
 export function deriveBroadcastChannelsFromTournaments(tournaments: Tournament[]): BroadcastChannel[] {
   const safeTournaments = Array.isArray(tournaments) ? tournaments : [];
   const lobbySlides = getTdtvLobbySlides(safeTournaments);
@@ -396,23 +412,30 @@ export function deriveBroadcastChannelsFromTournaments(tournaments: Tournament[]
       players[1] ?? { id: 'open-table-2', name: 'Open table', score: 0 }
     ];
 
+    const scheduleState = getTournamentScheduleState(tournament);
     const status: BroadcastStatus =
-      tournament.status === 'ACTIVE' ? 'LIVE' :
-      tournament.status === 'READY' ? 'UP_NEXT' :
-      'STANDBY';
+      scheduleState.isComingSoon
+        ? 'UP_NEXT'
+        : tournament.status === 'ACTIVE'
+          ? 'LIVE'
+          : tournament.status === 'READY'
+            ? 'UP_NEXT'
+            : 'STANDBY';
 
     return {
       id: tournament.id,
       number: String(index + 1).padStart(2, '0'),
       name: tournament.name || `Table ${index + 1}`,
       status,
-      now: tournament.name || 'Tournament stream',
-      next: activeMatch ? `Round ${activeMatch.round}` : 'Open table',
+      now: scheduleState.isComingSoon ? 'Coming Soon' : tournament.name || 'Tournament stream',
+      next: scheduleState.isComingSoon && scheduleState.startsAt
+        ? `Starts ${scheduleState.startsAt.toLocaleString()}`
+        : activeMatch ? `Round ${activeMatch.round}` : 'Open table',
       route: `/broadcast/${tournament.id}`,
-      venue: 'Promethean Venue',
-      location: 'Local Event',
+      venue: tournament.venueName || tournament.location || 'Promethean Venue',
+      location: tournament.location || tournament.venueName || 'Local Event',
       format: tournament.format.replace(/_/g, ' '),
-      round: activeMatch ? `Round ${activeMatch.round}` : 'Standby',
+      round: scheduleState.isComingSoon ? 'Coming Soon' : activeMatch ? `Round ${activeMatch.round}` : 'Standby',
       watching: 128 + index * 21,
       players: safePlayers
     };
