@@ -58,6 +58,7 @@ export interface BroadcastTimingSlot {
   kind: BroadcastTimingSlotKind;
   durationSeconds: number;
   enabled: boolean;
+  permanent?: boolean;
 }
 
 export interface BroadcastRuntimeConfig {
@@ -116,21 +117,24 @@ export function createDefaultBroadcastTimingSlots(): BroadcastTimingSlot[] {
       label: 'Leaderboard / Bracket Overlay',
       kind: 'LEADERBOARD',
       durationSeconds: 15,
-      enabled: true
+      enabled: true,
+      permanent: true
     },
     {
       id: 'race-lower-third-overlay',
       label: 'Race Lower-Third',
       kind: 'RACE',
       durationSeconds: 30,
-      enabled: true
+      enabled: true,
+      permanent: true
     },
     ...DEFAULT_BROADCAST_SPONSOR_CARDS.map((sponsor) => ({
       id: `slot-${sponsor.id}`,
       label: `${sponsor.name} Sponsor Slot`,
       kind: 'SPONSOR' as const,
       durationSeconds: sponsor.durationSeconds,
-      enabled: sponsor.enabled
+      enabled: sponsor.enabled,
+      permanent: sponsor.permanent ?? false
     }))
   ];
 }
@@ -313,7 +317,8 @@ export function getBroadcastRuntimeConfig(): BroadcastRuntimeConfig {
           label: typeof slot.label === 'string' && slot.label.trim().length > 0 ? slot.label : 'Overlay Slot',
           kind: slot.kind === 'SPONSOR' || slot.kind === 'LEADERBOARD' || slot.kind === 'RACE' || slot.kind === 'CUSTOM' ? slot.kind : 'CUSTOM',
           durationSeconds: typeof slot.durationSeconds === 'number' ? Math.max(5, slot.durationSeconds) : 15,
-          enabled: Boolean(slot.enabled ?? true)
+          enabled: Boolean(slot.enabled ?? true),
+          permanent: Boolean(slot.permanent ?? (slot.kind === 'LEADERBOARD' || slot.kind === 'RACE'))
         }))
       : fallback.timingSlots;
 

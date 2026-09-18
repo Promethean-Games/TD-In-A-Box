@@ -8,11 +8,14 @@ import {
   Coins,
   Crown,
   Expand,
+  Eye,
+  EyeOff,
   GitBranch,
   Info,
   Layers3,
   Play,
   SlidersHorizontal,
+  Trash2,
   Trophy,
   Users,
   Video
@@ -21,8 +24,11 @@ import QRCode from 'qrcode';
 import { Link, useParams } from 'react-router-dom';
 import { canAccessEntitlement, getCurrentUser, getEffectiveTier } from '@/lib/auth';
 import {
+  PROMETHEAN_SPONSOR_ID,
+  TDTV_NETWORK_SPONSOR_ID,
   type BroadcastCameraSource,
   type BroadcastRuntimeConfig,
+  type BroadcastTimingSlot,
   getBroadcastRuntimeConfig,
   saveBroadcastRuntimeConfig
 } from '@/lib/broadcast';
@@ -135,6 +141,7 @@ export default function Tournament() {
   const [cameraPairCode, setCameraPairCode] = useState('');
   const [cameraPairQrDataUrl, setCameraPairQrDataUrl] = useState('');
   const [cameraPairStatus, setCameraPairStatus] = useState('Not paired');
+  const [activePreviewStream, setActivePreviewStream] = useState<MediaStream | null>(null);
   const [signalTransport, setSignalTransport] = useState<'supabase' | 'broadcast-channel' | null>(null);
   const [networkCameraName, setNetworkCameraName] = useState('Network Camera');
   const [networkCameraUrl, setNetworkCameraUrl] = useState('');
@@ -425,12 +432,28 @@ export default function Tournament() {
     };
   }, [cameraPairUrl]);
   useEffect(() => {
+    const video = previewVideoRef.current;
+    if (!video) return;
+    if (cameraConnectionState === 'CONNECTED' && activePreviewStream) {
+      if (video.srcObject !== activePreviewStream) {
+        video.srcObject = activePreviewStream;
+      }
+      void video.play().catch(() => undefined);
+      return;
+    }
+    video.srcObject = null;
+    video.removeAttribute('src');
+    video.load();
+  }, [activePreviewStream, cameraConnectionState]);
+
+  useEffect(() => {
     return () => {
       void stopPairingSession(false);
       const stream = activeCameraStreamRef.current;
       if (!stream) return;
       stream.getTracks().forEach((track) => track.stop());
       activeCameraStreamRef.current = null;
+      setActivePreviewStream(null);
     };
   }, []);
 
@@ -489,6 +512,7 @@ export default function Tournament() {
         audio: false
       });
       activeCameraStreamRef.current = stream;
+      setActivePreviewStream(stream);
       if (previewVideoRef.current) {
         previewVideoRef.current.srcObject = stream;
         previewVideoRef.current.muted = true;
@@ -843,6 +867,63 @@ export default function Tournament() {
     });
   };
 
+  const getSponsorTimingSlotId = (sponsorId: string) => `slot-${sponsorId}`;
+
+  const isSystemSponsorTimingSlot = (slot: Pick<BroadcastTimingSlot, 'id'>) =>
+    slot.id === getSponsorTimingSlotId(TDTV_NETWORK_SPONSOR_ID) ||
+    slot.id === getSponsorTimingSlotId(PROMETHEAN_SPONSOR_ID);
+
+  const isProtectedTimingSlot = (slot: Pick<BroadcastTimingSlot, 'id' | 'kind' | 'permanent'>) =>
+    isSystemSponsorTimingSlot(slot) ||
+    slot.permanent === true ||
+    slot.kind === 'LEADERBOARD' ||
+    slot.kind === 'RACE';
+
+  const handleToggleTimingSlotVisibility = (slot: BroadcastTimingSlot) => {
+    if (isSystemSponsorTimingSlot(slot)) return;
+    const nextEnabled = !slot.enabled;
+
+    updateBroadcastConfig((current) => {
+      const nextTimingSlots = current.timingSlots.map((entry) =>
+        entry.id === slot.id ? { ...entry, enabled: nextEnabled } : entry
+      );
+      const sponsor = current.sponsorCards.find((entry) => getSponsorTimingSlotId(entry.id) === slot.id);
+
+      if (!sponsor) {
+        return { ...current, timingSlots: nextTimingSlots };
+      }
+
+      return {
+        ...current,
+        timingSlots: nextTimingSlots,
+        sponsorCards: current.sponsorCards.map((entry) =>
+          entry.id === sponsor.id ? { ...entry, enabled: nextEnabled } : entry
+        )
+      };
+    });
+  };
+
+  const handleRemoveTimingSlot = (slot: BroadcastTimingSlot) => {
+    if (isProtectedTimingSlot(slot)) return;
+
+    updateBroadcastConfig((current) => {
+      const nextTimingSlots = current.timingSlots.filter((entry) => entry.id !== slot.id);
+      const sponsor = current.sponsorCards.find((entry) => getSponsorTimingSlotId(entry.id) === slot.id);
+
+      if (!sponsor) {
+        return { ...current, timingSlots: nextTimingSlots };
+      }
+
+      return {
+        ...current,
+        timingSlots: nextTimingSlots,
+        sponsorCards: current.sponsorCards.filter((entry) => entry.id !== sponsor.id)
+      };
+    });
+
+    if (editingSponsorId === slot.id) setEditingSponsorId(null);
+  };
+
   const assignCameraToTable = (cameraId: string, tableNumber: number) => {
     const normalizedTable = Math.max(1, Math.min(totalTables, Math.floor(Number(tableNumber) || 1)));
     updateBroadcastConfig((current) => ({
@@ -955,6 +1036,7 @@ export default function Tournament() {
       activeStream.getTracks().forEach((track) => track.stop());
       activeCameraStreamRef.current = null;
     }
+    setActivePreviewStream(null);
     if (previewVideoRef.current) {
       previewVideoRef.current.srcObject = null;
       previewVideoRef.current.removeAttribute('src');
@@ -1079,10 +1161,7 @@ export default function Tournament() {
         if (!incomingStream) return;
         stopActiveCameraStream();
         activeCameraStreamRef.current = incomingStream;
-        if (previewVideoRef.current) {
-          previewVideoRef.current.srcObject = incomingStream;
-          void previewVideoRef.current.play().catch(() => undefined);
-        }
+        setActivePreviewStream(incomingStream);
         setCameraConnectionState('CONNECTED');
         markCameraConnected('remote-phone');
         openTableAssignmentPrompt('remote-phone');
@@ -1241,6 +1320,7 @@ export default function Tournament() {
         });
 
         activeCameraStreamRef.current = stream;
+        setActivePreviewStream(stream);
         if (previewVideoRef.current) {
           previewVideoRef.current.srcObject = stream;
           try {
@@ -1362,18 +1442,32 @@ export default function Tournament() {
 
   const handleAddSponsorSlot = () => {
     if (!canManageSponsorSlots) return;
+    const sponsorId = `sponsor-${Date.now()}`;
+    const slotId = getSponsorTimingSlotId(sponsorId);
+
     updateBroadcastConfig((current) => ({
       ...current,
       sponsorCards: [
         ...current.sponsorCards,
         {
-          id: `sponsor-${Date.now()}`,
+          id: sponsorId,
           name: 'New sponsor',
           durationSeconds: 10,
           marketingBlip: '',
           logoDataUrl: '',
           permanent: false,
           enabled: true
+        }
+      ],
+      timingSlots: [
+        ...current.timingSlots,
+        {
+          id: slotId,
+          label: 'New sponsor Sponsor Slot',
+          kind: 'SPONSOR' as const,
+          durationSeconds: 10,
+          enabled: true,
+          permanent: false
         }
       ]
     }));
@@ -1385,7 +1479,8 @@ export default function Tournament() {
       if (!sponsor || sponsor.permanent) return current;
       return {
         ...current,
-        sponsorCards: current.sponsorCards.filter((entry) => entry.id !== sponsorId)
+        sponsorCards: current.sponsorCards.filter((entry) => entry.id !== sponsorId),
+        timingSlots: current.timingSlots.filter((entry) => entry.id !== getSponsorTimingSlotId(sponsorId))
       };
     });
     if (editingSponsorId === sponsorId) setEditingSponsorId(null);
@@ -1396,9 +1491,8 @@ export default function Tournament() {
     field: 'name' | 'durationSeconds' | 'marketingBlip',
     value: string
   ) => {
-    updateBroadcastConfig((current) => ({
-      ...current,
-      sponsorCards: current.sponsorCards.map((sponsor) => {
+    updateBroadcastConfig((current) => {
+      const nextSponsorCards = current.sponsorCards.map((sponsor) => {
         if (sponsor.id !== sponsorId) return sponsor;
         if (sponsor.permanent && field !== 'durationSeconds') return sponsor;
         if (field === 'durationSeconds') {
@@ -1413,8 +1507,25 @@ export default function Tournament() {
           return { ...sponsor, marketingBlip: nextBlip };
         }
         return { ...sponsor, name: value };
-      })
-    }));
+      });
+
+      const nextTimingSlots = current.timingSlots.map((slot) => {
+        if (slot.id !== getSponsorTimingSlotId(sponsorId)) return slot;
+
+        const sponsor = nextSponsorCards.find((entry) => entry.id === sponsorId);
+        if (!sponsor) return slot;
+
+        if (field === 'durationSeconds') {
+          return { ...slot, durationSeconds: sponsor.durationSeconds };
+        }
+        if (field === 'name') {
+          return { ...slot, label: `${sponsor.name} Sponsor Slot` };
+        }
+        return slot;
+      });
+
+      return { ...current, sponsorCards: nextSponsorCards, timingSlots: nextTimingSlots };
+    });
   };
 
   const handleSponsorLogoUpload = (sponsorId: string, file: File | null) => {
@@ -2080,7 +2191,7 @@ export default function Tournament() {
                       </div>
                     </div>
                     <div className="broadcast-timing-slot-list">
-                      {broadcastConfig.timingSlots.map((slot) => (
+                      {broadcastConfig.timingSlots.filter((slot) => slot.enabled).map((slot) => (
                         <div key={slot.id} className={`broadcast-timing-slot broadcast-timing-slot--${slot.kind.toLowerCase()}`}>
                           <div>
                             <span className="broadcast-timing-slot-kind">{slot.kind}</span>
@@ -2380,104 +2491,94 @@ export default function Tournament() {
                   </div>
 
                   <article className="broadcast-panel">
-                    <div className="broadcast-panel-head">
-                      <h3>Sponsorship Slots</h3>
-                      {canManageSponsorSlots && (
-                        <button type="button" className="secondary-action" onClick={handleAddSponsorSlot}>
-                          Add sponsor slot
-                        </button>
-                      )}
-                    </div>
                     {!canManageSponsorSlots && (
                       <p className="broadcast-copy">
                         Sponsor slot creation is available for Pro+, Venue, and Platform Admin tiers.
                       </p>
                     )}
-                    <div className="sponsor-list">
-                      {broadcastConfig.sponsorCards.map((sponsor) => (
-                        <div key={sponsor.id} className="sponsor-row">
-                          {sponsor.logoDataUrl ? (
-                            <div className="sponsor-thumb-shell" aria-hidden="true">
-                              <img className="sponsor-thumb" src={sponsor.logoDataUrl} alt="" />
-                            </div>
-                          ) : (
-                            <div className="sponsor-thumb-shell sponsor-thumb-shell--empty" aria-hidden="true">
-                              <span>{sponsor.name.slice(0, 2).toUpperCase()}</span>
-                            </div>
-                          )}
-                          <div className="sponsor-main">
-                            <strong>{sponsor.name}</strong>
-                            <span>{sponsor.durationSeconds}s • {sponsor.marketingBlip || 'No marketing blip yet'}</span>
-                            <small>
-                              {sponsor.permanent
-                                ? 'Permanent slot (minimum 5s, fixed title/logo/blurb, cannot remove)'
-                                : 'Editable sponsor slot'}
-                            </small>
-                          </div>
-                          <div className="sponsor-actions">
-                            <button
-                              type="button"
-                              className="small-action-btn"
-                              onClick={() => setEditingSponsorId(sponsor.id)}
-                              aria-label={`Edit ${sponsor.name}`}
-                            >
-                              ✎
-                            </button>
-                            {canManageSponsorSlots && !sponsor.permanent && (
-                              <button
-                                type="button"
-                                className="danger-action"
-                                onClick={() => handleRemoveSponsorSlot(sponsor.id)}
-                              >
-                                Remove
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
                     <div className="broadcast-timing-slot-editor">
                       <div className="broadcast-timing-slot-editor-head">
-                        <strong>Timing slots</strong>
-                        <span>{broadcastConfig.timingSlots.filter((slot) => slot.enabled).length} active</span>
+                        <strong>Timing Slots</strong>
+                        <div className="broadcast-timing-slot-editor-head-actions">
+                          <span>{broadcastConfig.timingSlots.filter((slot) => slot.enabled).length} active</span>
+                          {canManageSponsorSlots && (
+                            <button type="button" className="secondary-action" onClick={handleAddSponsorSlot}>
+                              Add sponsor slot
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="broadcast-timing-slot-editor-list">
-                        {broadcastConfig.timingSlots.map((slot) => (
-                          <label key={slot.id} className="broadcast-timing-slot-editor-row">
-                            <input
-                              type="checkbox"
-                              checked={slot.enabled}
-                              onChange={(event) =>
-                                updateBroadcastConfig((current) => ({
-                                  ...current,
-                                  timingSlots: current.timingSlots.map((entry) =>
-                                    entry.id === slot.id ? { ...entry, enabled: event.target.checked } : entry
-                                  )
-                                }))
-                              }
-                            />
-                            <div>
-                              <strong>{slot.label}</strong>
-                              <span>{slot.kind}</span>
+                        {broadcastConfig.timingSlots.map((slot) => {
+                          const isSponsorSlot = slot.kind === 'SPONSOR';
+                          const sponsor = broadcastConfig.sponsorCards.find((entry) => getSponsorTimingSlotId(entry.id) === slot.id);
+                          const eyeButtonLabel = slot.enabled ? 'Hide overlay' : 'Show overlay';
+                          const isSystemSponsor = isSystemSponsorTimingSlot(slot);
+                          const canDelete = !isProtectedTimingSlot(slot);
+
+                          return (
+                            <div key={slot.id} className={`broadcast-timing-slot-editor-row ${slot.enabled ? '' : 'broadcast-timing-slot-editor-row--hidden'}`}>
+                              <button
+                                type="button"
+                                className="slot-visibility-toggle"
+                                onClick={() => handleToggleTimingSlotVisibility(slot)}
+                                disabled={isSystemSponsor}
+                                aria-label={eyeButtonLabel}
+                                title={isSystemSponsor ? 'This required TDTV Network or Promethean Games slot cannot be hidden.' : eyeButtonLabel}
+                              >
+                                {slot.enabled ? <Eye size={16} /> : <EyeOff size={16} />}
+                              </button>
+                              <div>
+                                <strong>{slot.label}</strong>
+                                <span>{slot.kind}</span>
+                              </div>
+                              <div className="broadcast-timing-slot-editor-actions">
+                                {isSponsorSlot && canManageSponsorSlots && (
+                                  <button
+                                    type="button"
+                                    className="small-action-btn"
+                                    onClick={() => setEditingSponsorId(sponsor?.id ?? slot.id.replace(/^slot-/, ''))}
+                                    aria-label={`Edit ${slot.label}`}
+                                  >
+                                    ✎
+                                  </button>
+                                )}
+                                {canDelete && (
+                                  <button
+                                    type="button"
+                                    className="small-action-btn danger-action"
+                                    onClick={() => handleRemoveTimingSlot(slot)}
+                                    aria-label={`Remove ${slot.label}`}
+                                    title={`Remove ${slot.label}`}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                                <input
+                                  type="number"
+                                  min={5}
+                                  value={slot.durationSeconds}
+                                  onChange={(event) => {
+                                    const nextDuration = Math.max(5, Number(event.target.value) || 5);
+                                    if (isSponsorSlot && sponsor) {
+                                      handleSponsorFieldChange(sponsor.id, 'durationSeconds', String(nextDuration));
+                                      return;
+                                    }
+
+                                    updateBroadcastConfig((current) => ({
+                                      ...current,
+                                      timingSlots: current.timingSlots.map((entry) =>
+                                        entry.id === slot.id
+                                          ? { ...entry, durationSeconds: nextDuration }
+                                          : entry
+                                      )
+                                    }));
+                                  }}
+                                />
+                              </div>
                             </div>
-                            <input
-                              type="number"
-                              min={5}
-                              value={slot.durationSeconds}
-                              onChange={(event) =>
-                                updateBroadcastConfig((current) => ({
-                                  ...current,
-                                  timingSlots: current.timingSlots.map((entry) =>
-                                    entry.id === slot.id
-                                      ? { ...entry, durationSeconds: Math.max(5, Number(event.target.value) || 5) }
-                                      : entry
-                                  )
-                                }))
-                              }
-                            />
-                          </label>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
 
@@ -2686,13 +2787,19 @@ export default function Tournament() {
 
           {workflowTab === 'BRACKET' && (
             <div className="bracket-tab">
-              <section className="bracket-setup-card">
+              <section className={`bracket-setup-card ${!canCreateBracket ? 'bracket-setup-card--locked' : ''}`} aria-disabled={!canCreateBracket}>
                 <div className="bracket-setup-head">
                   <div>
-                    <h3>Bracket Setup</h3>
+                    <div className="bracket-setup-head-line">
+                      <h3>Bracket Setup</h3>
+                      <span className={`bracket-lock-pill ${!canCreateBracket ? 'locked' : 'editable'}`}>
+                        {canCreateBracket ? 'Editable' : 'Locked'}
+                      </span>
+                    </div>
                     <p>
-                      Choose how the field should be seeded before the bracket is generated.
-                      Manual seeding opens a saved seed board so you can drag players into place.
+                      {canCreateBracket
+                        ? 'Choose how the field should be seeded before the bracket is generated. Manual seeding opens a saved seed board so you can drag players into place.'
+                        : 'Bracket is locked after generation. Seeding and bracket structure are now fixed to keep tournament flow consistent.'}
                     </p>
                   </div>
                   <div className="bracket-setup-actions">

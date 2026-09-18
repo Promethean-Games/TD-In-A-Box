@@ -782,6 +782,36 @@
   gap: 10px;
 }
 
+.bracket-setup-head-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bracket-lock-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+
+.bracket-lock-pill.editable {
+  background: rgba(74, 222, 128, 0.14);
+  border: 1px solid rgba(74, 222, 128, 0.35);
+  color: #ccf8d8;
+}
+
+.bracket-lock-pill.locked {
+  background: rgba(251, 146, 60, 0.14);
+  border: 1px solid rgba(251, 146, 60, 0.42);
+  color: #ffd9b3;
+}
+
 .bracket-setup-head h3,
 .bracket-seeding-preview-head strong,
 .seeding-modal-head h3 {
@@ -800,6 +830,27 @@
   display: inline-flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.bracket-setup-card--locked {
+  border-color: rgba(251, 146, 60, 0.28);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(251, 146, 60, 0.12), transparent 34%),
+    rgba(8, 12, 18, 0.94);
+  opacity: 0.9;
+}
+
+.bracket-setup-card--locked .bracket-setup-head p,
+.bracket-setup-card--locked .control-group small,
+.bracket-setup-card--locked .bracket-seeding-preview-head span,
+.bracket-setup-card--locked .bracket-seeding-row {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.bracket-setup-card--locked .control-group select,
+.bracket-setup-card--locked .bracket-seeding-preview {
+  border-color: rgba(255, 255, 255, 0.12);
+  opacity: 0.82;
 }
 
 .bracket-setup-btn {
@@ -2305,6 +2356,12 @@
   font-size: 0.76rem;
 }
 
+.broadcast-timing-slot-editor-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .broadcast-timing-slot-editor-list {
   display: grid;
   gap: 8px;
@@ -2345,6 +2402,40 @@
   background: rgba(8, 12, 17, 0.9);
   color: white;
   padding: 6px 8px;
+}
+
+.broadcast-timing-slot-editor-row--hidden {
+  opacity: 0.68;
+}
+
+.broadcast-timing-slot-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.slot-visibility-toggle {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  color: #e2e8f0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: opacity 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.slot-visibility-toggle:not(:disabled):hover {
+  border-color: rgba(96, 165, 250, 0.4);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.slot-visibility-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .broadcast-checklist {
