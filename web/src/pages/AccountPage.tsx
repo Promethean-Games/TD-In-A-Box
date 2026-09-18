@@ -22,12 +22,35 @@ import {
 import type { SubscriptionTier } from '@/lib/subscription';
 import './AccountPage.css';
 
-const SUBSCRIPTION_OPTIONS: { tier: SubscriptionTier; name: string; detail: string }[] = [
-  { tier: 'BASIC', name: 'Basic', detail: 'Core tournament workflow for individual testing.' },
-  { tier: 'PRO', name: 'Pro', detail: 'Broadcast basics, templates, and expanded tournament tools.' },
-  { tier: 'PRO_PLUS', name: 'Pro+', detail: 'TDTV channel access, advanced broadcast tools, and branding.' },
-  { tier: 'VENUE', name: 'Venue', detail: 'Venue-level channel, device, and broadcast controls.' }
+const SUBSCRIPTION_OPTIONS: { tier: SubscriptionTier; name: string; price: string; detail: string }[] = [
+  { tier: 'BASIC', name: 'Basic', price: 'Free', detail: 'Core tournament workflow for individual testing.' },
+  { tier: 'PRO', name: 'Pro', price: '$4.99/mo', detail: 'Broadcast basics, templates, and expanded tournament tools.' },
+  { tier: 'PRO_PLUS', name: 'Pro+', price: '$9.99/mo', detail: 'TDTV channel access, advanced broadcast tools, and branding.' },
+  { tier: 'VENUE', name: 'Venue', price: 'Custom', detail: 'Venue-level channel, device, and broadcast controls.' }
 ];
+
+const BROADCAST_BILLING_OPTIONS = [
+  {
+    tier: 'PRO' as const,
+    name: 'Pro',
+    price: '$4.99/mo',
+    kicker: 'In-room production',
+    detail: 'Built for local stream control inside the venue.',
+    emphasis: 'Good for operators who want overlays, camera pairing, and broadcast tools without TDTV distribution.',
+    features: ['Broadcast overlays', 'USB + QR camera workflows', 'Tournament templates', 'Tournament history', 'TD profile tools'],
+    footnote: 'TDTV / TV Guide placement is not included on Pro.'
+  },
+  {
+    tier: 'PRO_PLUS' as const,
+    name: 'Pro+',
+    price: '$9.99/mo',
+    kicker: 'TDTV-ready coverage',
+    detail: 'Built for public-facing streams and the stronger upsell path.',
+    emphasis: 'Use this tier when you want the tournament on TV, on the guide, and packaged with stronger broadcast controls.',
+    features: ['Everything in Pro', 'TDTV / TV Guide placement', 'TD channel access', 'Network / Wi-Fi camera support', 'Advanced branding + sponsor tools'],
+    footnote: 'Recommended when players expect a public-facing broadcast presence.'
+  }
+] as const;
 
 export default function AccountPage() {
   const navigate = useNavigate();
@@ -43,6 +66,8 @@ export default function AccountPage() {
   const isVenueAccount = user.role === 'VENUE_ADMIN' || user.tier === 'VENUE';
   const isPlatformAdmin = user.role === 'PLATFORM_ADMIN';
   const currentSection = searchParams.get('section') === 'billing' ? 'billing' : 'profile';
+  const billingOffer = searchParams.get('offer');
+  const showBroadcastOffer = currentSection === 'billing' && billingOffer === 'broadcast' && !isPlatformAdmin;
   const effectiveTier = getEffectiveTier(user);
   const primaryVenueId = user.venueIds[0] ?? null;
   const venueChannelOptions = getAllowedBroadcastChannelsForUser(user).filter((channel) => channel.type === 'VENUE');
@@ -159,7 +184,7 @@ export default function AccountPage() {
 
   return (
     <div className="account-page">
-      <div className="account-card">
+      <div className={`account-card ${showBroadcastOffer ? 'account-card--offer' : ''}`}>
         <header className="account-header">
           <h1>Account</h1>
           <span className={`account-badge ${isPlatformAdmin ? 'account-badge--admin' : ''}`}>{getUserTierLabel(user)}</span>
@@ -182,58 +207,60 @@ export default function AccountPage() {
           </button>
         </div>
 
-        <div className="account-section">
-          <div className="account-row">
-            <div className="account-field">
-              <label>Name</label>
-              {currentSection === 'profile' ? (
-                <input
-                  className="account-input"
-                  type="text"
-                  value={profileNameDraft}
-                  onChange={(event) => setProfileNameDraft(event.target.value)}
-                />
-              ) : (
-                <div className="value">{user.name}</div>
-              )}
+        {!showBroadcastOffer && (
+          <div className="account-section">
+            <div className="account-row">
+              <div className="account-field">
+                <label>Name</label>
+                {currentSection === 'profile' ? (
+                  <input
+                    className="account-input"
+                    type="text"
+                    value={profileNameDraft}
+                    onChange={(event) => setProfileNameDraft(event.target.value)}
+                  />
+                ) : (
+                  <div className="value">{user.name}</div>
+                )}
+              </div>
+              <div className="account-field">
+                <label>Email</label>
+                {currentSection === 'profile' ? (
+                  <input
+                    className="account-input"
+                    type="email"
+                    value={profileEmailDraft}
+                    onChange={(event) => setProfileEmailDraft(event.target.value)}
+                  />
+                ) : (
+                  <div className="value">{user.email}</div>
+                )}
+              </div>
             </div>
-            <div className="account-field">
-              <label>Email</label>
-              {currentSection === 'profile' ? (
-                <input
-                  className="account-input"
-                  type="email"
-                  value={profileEmailDraft}
-                  onChange={(event) => setProfileEmailDraft(event.target.value)}
-                />
-              ) : (
-                <div className="value">{user.email}</div>
-              )}
-            </div>
-          </div>
 
-          <div className="account-row">
-            <div className="account-field">
-              <label>Role</label>
-              <div className="value">{getUserRoleLabel(user)}</div>
+            <div className="account-row">
+              <div className="account-field">
+                <label>Role</label>
+                <div className="value">{getUserRoleLabel(user)}</div>
+              </div>
+              <div className="account-field">
+                <label>Status</label>
+                <div className="value">{user.status}</div>
+              </div>
             </div>
-            <div className="account-field">
-              <label>Status</label>
-              <div className="value">{user.status}</div>
-            </div>
-          </div>
 
-          <div className="account-row">
-            <div className="account-field">
-              <label>Account ID</label>
-              <div className="value">{user.id}</div>
-            </div>
-            <div className="account-field">
-              <label>TDTV Channel</label>
-              <div className="value">{user.tdChannelId ?? 'Not assigned'}</div>
+            <div className="account-row">
+              <div className="account-field">
+                <label>Account ID</label>
+                <div className="value">{user.id}</div>
+              </div>
+              <div className="account-field">
+                <label>TDTV Channel</label>
+                <div className="value">{user.tdChannelId ?? 'Not assigned'}</div>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {currentSection === 'profile' && (
           <div className="account-actions account-actions--inline account-actions--profile">
@@ -255,31 +282,99 @@ export default function AccountPage() {
               </div>
             ) : (
               <>
-                <div className="billing-section-head">
-                  <h2>Plan Management</h2>
-                  <p>Select the plan you want active for product testing. Stripe checkout wiring can replace this flow later.</p>
-                </div>
-                <div className="billing-plan-grid">
-                  {SUBSCRIPTION_OPTIONS.map((option) => {
-                    const isCurrent = effectiveTier === option.tier;
-                    return (
-                      <article key={option.tier} className={`billing-plan-card ${isCurrent ? 'active' : ''}`}>
-                        <div className="billing-plan-copy">
-                          <strong>{option.name}</strong>
-                          <span>{option.detail}</span>
-                        </div>
-                        <button
-                          type="button"
-                          className={isCurrent ? 'secondary-btn' : 'primary-btn'}
-                          onClick={() => void handleSelectSubscription(option.tier)}
-                          disabled={isCurrent || updatingSubscription === option.tier}
-                        >
-                          {isCurrent ? 'Current Plan' : updatingSubscription === option.tier ? 'Updating...' : `Switch to ${option.name}`}
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
+                {showBroadcastOffer ? (
+                  <>
+                    <div className="billing-offer-hero">
+                      <span className="billing-offer-kicker">Broadcast Upgrade</span>
+                      <h2>Choose the broadcast lane that matches the audience you want.</h2>
+                      <p>
+                        Pro is for in-room production. Pro+ is the tier for TDTV / TV Guide placement, wider exposure, and the fuller
+                        broadcast toolset.
+                      </p>
+                      <div className="billing-offer-current">
+                        Current plan: <strong>{SUBSCRIPTION_OPTIONS.find((option) => option.tier === effectiveTier)?.name ?? effectiveTier}</strong>
+                      </div>
+                    </div>
+
+                    <div className="billing-compare-grid">
+                      {BROADCAST_BILLING_OPTIONS.map((option) => {
+                        const isCurrent = effectiveTier === option.tier;
+                        return (
+                          <article
+                            key={option.tier}
+                            className={`billing-compare-card ${option.tier === 'PRO_PLUS' ? 'featured' : ''} ${isCurrent ? 'active' : ''}`}
+                          >
+                            <div className="billing-compare-head">
+                              <span className="billing-compare-kicker">{option.kicker}</span>
+                              <div className="billing-compare-title-row">
+                                <strong>{option.name}</strong>
+                                <span className="billing-compare-price">{option.price}</span>
+                              </div>
+                              <p>{option.detail}</p>
+                            </div>
+
+                            <div className="billing-compare-emphasis">{option.emphasis}</div>
+
+                            <div className="billing-compare-feature-list">
+                              {option.features.map((feature) => (
+                                <div key={`${option.tier}-${feature}`} className="billing-compare-feature">
+                                  <span className="billing-compare-bullet" aria-hidden="true" />
+                                  <span>{feature}</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="billing-compare-footnote">{option.footnote}</div>
+
+                            <button
+                              type="button"
+                              className={isCurrent ? 'secondary-btn' : 'primary-btn'}
+                              onClick={() => void handleSelectSubscription(option.tier)}
+                              disabled={isCurrent || updatingSubscription === option.tier}
+                            >
+                              {isCurrent ? 'Current Plan' : updatingSubscription === option.tier ? 'Processing...' : `Purchase ${option.name}`}
+                            </button>
+                          </article>
+                        );
+                      })}
+                    </div>
+
+                    <p className="billing-offer-caption">
+                      Purchase buttons activate plan access for testing now. Stripe checkout can replace this exact purchase step later.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="billing-section-head">
+                      <h2>Plan Management</h2>
+                      <p>Select the plan you want active for product testing. Stripe checkout wiring can replace this flow later.</p>
+                    </div>
+                    <div className="billing-plan-grid">
+                      {SUBSCRIPTION_OPTIONS.map((option) => {
+                        const isCurrent = effectiveTier === option.tier;
+                        return (
+                          <article key={option.tier} className={`billing-plan-card ${isCurrent ? 'active' : ''}`}>
+                            <div className="billing-plan-copy">
+                              <div className="billing-plan-title-row">
+                                <strong>{option.name}</strong>
+                                <span className="billing-plan-price">{option.price}</span>
+                              </div>
+                              <span>{option.detail}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className={isCurrent ? 'secondary-btn' : 'primary-btn'}
+                              onClick={() => void handleSelectSubscription(option.tier)}
+                              disabled={isCurrent || updatingSubscription === option.tier}
+                            >
+                              {isCurrent ? 'Current Plan' : updatingSubscription === option.tier ? 'Updating...' : `Switch to ${option.name}`}
+                            </button>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>
