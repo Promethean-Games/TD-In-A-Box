@@ -1,5 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Coins, Expand, GitBranch, Info, Play, Trophy, Users, Video } from 'lucide-react';
+import {
+  ArrowRight,
+  BarChart3,
+  Camera,
+  ChevronLeft,
+  ChevronRight,
+  Coins,
+  Crown,
+  Expand,
+  GitBranch,
+  Info,
+  Layers3,
+  Play,
+  SlidersHorizontal,
+  Trophy,
+  UserRound,
+  Users,
+  Video
+} from 'lucide-react';
 import QRCode from 'qrcode';
 import { Link, useParams } from 'react-router-dom';
 import { getCurrentUser, hasPermission } from '@/lib/auth';
@@ -50,6 +68,14 @@ const WORKFLOW_TABS = [
   { value: 'PAYOUTS', label: 'Payouts', detail: 'Money', icon: Coins },
   { value: 'BRACKET', label: 'Bracket', detail: 'Matches', icon: GitBranch },
   { value: 'BROADCAST', label: 'Broadcast', detail: 'TDTV', icon: Video }
+] as const;
+
+const BROADCAST_UPSELL_FEATURES = [
+  { title: 'Broadcast & Overlays', detail: 'Live scores, match info, and in-room production tools.', icon: Video },
+  { title: 'Tournament Templates', detail: 'Save your setup and run the room faster next time.', icon: Layers3 },
+  { title: 'Custom Race Formats', detail: 'Dial in the ruleset your event actually needs.', icon: SlidersHorizontal },
+  { title: 'Tournament History', detail: 'Keep past events, stats, and repeatable workflows.', icon: BarChart3 },
+  { title: 'TD Profile', detail: 'Build a recognizable operator identity around your events.', icon: UserRound }
 ] as const;
 
 function formatLabel(value: string): string {
@@ -1574,20 +1600,6 @@ export default function Tournament() {
                 </button>
               </form>
 
-              <div className="seed-mode-grid">
-                {SEEDING_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`seed-mode-tile ${seedingMode === option.value ? 'active' : ''}`}
-                    onClick={() => handleSeedingModeChange(option.value)}
-                    disabled={currentTournament.bracketGenerated || isTournamentReadOnly}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-
               <div className="player-list">
                 {rosterDisplayIds.map((playerId) => {
                   const player = players.find((item) => item.id === playerId);
@@ -1807,12 +1819,69 @@ export default function Tournament() {
           {workflowTab === 'BROADCAST' && (
             <div className="broadcast-tab">
               {!isPayingMember ? (
-                <div className="broadcast-upgrade-card">
-                  <h3>Broadcast Hub is a paid feature</h3>
-                  <p>Upgrade to Pro or higher to enable overlays, sponsor rotation, and TDTV channel tools.</p>
-                  <Link to="/account" className="primary-action">
-                    Upgrade to unlock broadcasting
+                <div className="broadcast-upgrade-card broadcast-upgrade-card--basic">
+                  <div className="broadcast-upgrade-hero">
+                    <div className="broadcast-upgrade-copy">
+                      <span className="broadcast-upgrade-kicker">
+                        <Crown size={18} />
+                        Pro & higher
+                      </span>
+                      <h3>
+                        <span>Take it</span>
+                        <strong>LIVE</strong>
+                      </h3>
+                      <p>Upgrade to unlock the energetic tournament broadcast layer without burying what each plan really gets you.</p>
+                      <div className="broadcast-upgrade-callout">
+                        Pro unlocks in-room broadcast tools. <strong>Pro+</strong> is the tier that adds TDTV / TV Guide placement.
+                      </div>
+                    </div>
+
+                    <div className="broadcast-upgrade-stage" aria-hidden="true">
+                      <div className="broadcast-upgrade-stage-top">
+                        <span className="broadcast-upgrade-live-pill">LIVE</span>
+                      </div>
+                      <div className="broadcast-upgrade-stage-camera">
+                        <Camera size={22} />
+                        <span>Table 3</span>
+                      </div>
+                      <div className="broadcast-upgrade-scoreboard">
+                        <div className="broadcast-upgrade-scoreboard-player broadcast-upgrade-scoreboard-player--red">
+                          <span>Carter</span>
+                          <strong>2</strong>
+                        </div>
+                        <div className="broadcast-upgrade-scoreboard-player broadcast-upgrade-scoreboard-player--blue">
+                          <span>Nguyen</span>
+                          <strong>4</strong>
+                        </div>
+                      </div>
+                      <p className="broadcast-upgrade-tag">Same game. Bigger audience.</p>
+                    </div>
+                  </div>
+
+                  <div className="broadcast-upgrade-feature-list">
+                    {BROADCAST_UPSELL_FEATURES.map((feature) => {
+                      const Icon = feature.icon;
+                      return (
+                        <div key={feature.title} className="broadcast-upgrade-feature">
+                          <span className="broadcast-upgrade-feature-icon">
+                            <Icon size={22} />
+                          </span>
+                          <div className="broadcast-upgrade-feature-copy">
+                            <strong>{feature.title}</strong>
+                            <span>{feature.detail}</span>
+                          </div>
+                          <ArrowRight size={20} className="broadcast-upgrade-feature-arrow" />
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <Link to="/account?section=billing&offer=broadcast" className="broadcast-upgrade-cta">
+                    <span>Compare Pro plans</span>
+                    <strong>From $4.99/mo</strong>
+                    <ArrowRight size={28} />
                   </Link>
+                  <div className="broadcast-upgrade-footer">More control. More exposure. A bigger game.</div>
                 </div>
               ) : (
                 <>

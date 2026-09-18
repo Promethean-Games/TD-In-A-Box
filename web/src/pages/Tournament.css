@@ -403,27 +403,6 @@
   padding: 12px 14px;
 }
 
-.seed-mode-grid {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-}
-
-.seed-mode-tile {
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
-  color: white;
-  font-weight: 700;
-  padding: 10px;
-  cursor: pointer;
-}
-
-.seed-mode-tile.active {
-  border-color: rgba(255, 93, 104, 0.95);
-  box-shadow: 0 0 0 2px rgba(255, 93, 104, 0.3), 0 0 16px rgba(255, 93, 104, 0.25);
-}
-
 .player-list {
   display: grid;
   gap: 10px;

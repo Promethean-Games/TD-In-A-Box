@@ -71,6 +71,61 @@
   color: #f4f7fb;
 }
 
+.field-label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+}
+
+.field-hint-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.field-hint-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(142, 210, 255, 0.28);
+  background: rgba(142, 210, 255, 0.08);
+  color: #aee3ff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: help;
+  outline: none;
+}
+
+.field-tooltip {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 15;
+  width: min(280px, 80vw);
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(8, 12, 18, 0.96);
+  color: rgba(255,255,255,0.86);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  box-shadow: 0 18px 36px rgba(0,0,0,0.34);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.field-hint-wrap:hover .field-tooltip,
+.field-hint-wrap:focus-within .field-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .form-input,
 .form-select {
   width: 100%;
@@ -388,6 +443,12 @@
   box-shadow: 0 18px 34px rgba(233, 53, 73, 0.3);
 }
 
+.create-tournament-btn.ready {
+  background: linear-gradient(135deg, #2cb86f, #179856);
+  box-shadow: 0 18px 34px rgba(30, 168, 95, 0.28);
+  animation: createReadyPulse 2.6s ease-in-out infinite;
+}
+
 .primary-btn:hover,
 .secondary-btn:hover {
   transform: translateY(-1px);
@@ -400,8 +461,19 @@
 }
 
 .primary-btn:disabled {
-  opacity: 0.7;
-  cursor: wait;
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+  animation: none;
+}
+
+@keyframes createReadyPulse {
+  0%, 100% {
+    box-shadow: 0 18px 34px rgba(30, 168, 95, 0.22);
+  }
+  50% {
+    box-shadow: 0 18px 34px rgba(30, 168, 95, 0.4), 0 0 0 6px rgba(30, 168, 95, 0.08);
+  }
 }
 
 @media (max-width: 640px) {

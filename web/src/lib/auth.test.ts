@@ -6,7 +6,7 @@ import {
   getSystemBroadcastSponsorDefaults,
   getBroadcastRuntimeConfig
 } from './broadcast';
-import { hasPermission, listEffectivePermissions, type AppUser } from './auth';
+import { getEffectiveTier, getUserTierLabel, hasPermission, listEffectivePermissions, type AppUser } from './auth';
 
 const platformAdmin: AppUser = {
   id: 'platform-admin',
@@ -62,6 +62,8 @@ describe('authorization model', () => {
   it('grants platform admin all platform powers', () => {
     expect(hasPermission(platformAdmin, 'platform.manage_users')).toBe(true);
     expect(hasPermission(platformAdmin, 'platform.manage_channels')).toBe(true);
+    expect(getEffectiveTier(platformAdmin)).toBe('VENUE');
+    expect(getUserTierLabel(platformAdmin)).toBe('Platform Admin');
   });
 
   it('blocks bare users from pro+ permissions', () => {

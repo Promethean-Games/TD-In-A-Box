@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { getCurrentUser, signOutCurrentUser } from '@/lib/auth';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  getCurrentUser,
+  getEffectiveTier,
+  getUserRoleLabel,
+  getUserTierLabel,
+  signOutCurrentUser,
+  updateCurrentUserProfile,
+  updateCurrentUserSubscription
+} from '@/lib/auth';
 import {
   formatChannelOptionLabel,
   getAllowedBroadcastChannelsForUser,
@@ -11,15 +19,31 @@ import {
   submitVenueChannelChangeRequest,
   updateVenueChannelSettings
 } from '@/lib/channel';
+import type { SubscriptionTier } from '@/lib/subscription';
 import './AccountPage.css';
+
+const SUBSCRIPTION_OPTIONS: { tier: SubscriptionTier; name: string; detail: string }[] = [
+  { tier: 'BASIC', name: 'Basic', detail: 'Core tournament workflow for individual testing.' },
+  { tier: 'PRO', name: 'Pro', detail: 'Broadcast basics, templates, and expanded tournament tools.' },
+  { tier: 'PRO_PLUS', name: 'Pro+', detail: 'TDTV channel access, advanced broadcast tools, and branding.' },
+  { tier: 'VENUE', name: 'Venue', detail: 'Venue-level channel, device, and broadcast controls.' }
+];
 
 export default function AccountPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const user = getCurrentUser();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [updatingSubscription, setUpdatingSubscription] = useState<SubscriptionTier | null>(null);
   const [, setRefreshKey] = useState(0);
+  const [profileNameDraft, setProfileNameDraft] = useState(user.name);
+  const [profileEmailDraft, setProfileEmailDraft] = useState(user.email);
   const isVenueAccount = user.role === 'VENUE_ADMIN' || user.tier === 'VENUE';
+  const isPlatformAdmin = user.role === 'PLATFORM_ADMIN';
+  const currentSection = searchParams.get('section') === 'billing' ? 'billing' : 'profile';
+  const effectiveTier = getEffectiveTier(user);
   const primaryVenueId = user.venueIds[0] ?? null;
   const venueChannelOptions = getAllowedBroadcastChannelsForUser(user).filter((channel) => channel.type === 'VENUE');
   const venueChannelSettings = isVenueAccount ? getVenueChannelSettingsForUser(user) : null;
@@ -50,6 +74,11 @@ export default function AccountPage() {
   useEffect(() => {
     setRequestedVenueChannelNumber(currentSelectedVenueChannel?.number ?? availableVenueNumbers[0] ?? 1);
   }, [currentSelectedVenueChannel?.number, availableVenueNumbers]);
+
+  useEffect(() => {
+    setProfileNameDraft(user.name);
+    setProfileEmailDraft(user.email);
+  }, [user.name, user.email]);
 
   const handleSignOut = async () => {
     setError(null);
@@ -92,30 +121,101 @@ export default function AccountPage() {
     }
   };
 
+  const handleSaveProfile = async () => {
+    setError(null);
+    setNotice(null);
+    setSavingProfile(true);
+    try {
+      const updated = await updateCurrentUserProfile(profileNameDraft, profileEmailDraft);
+      setProfileNameDraft(updated.name);
+      setProfileEmailDraft(updated.email);
+      setNotice(
+        profileEmailDraft.trim() !== user.email.trim()
+          ? 'Account profile saved. If your email changed, watch for a confirmation message from your auth provider.'
+          : 'Account profile saved.'
+      );
+      setRefreshKey((value) => value + 1);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Unable to save profile.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleSelectSubscription = async (tier: SubscriptionTier) => {
+    setError(null);
+    setNotice(null);
+    setUpdatingSubscription(tier);
+    try {
+      await updateCurrentUserSubscription(tier);
+      setNotice(`Plan updated to ${tier.replace('_', '+')}.`);
+      setRefreshKey((value) => value + 1);
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : 'Unable to update subscription.');
+    } finally {
+      setUpdatingSubscription(null);
+    }
+  };
+
   return (
     <div className="account-page">
       <div className="account-card">
         <header className="account-header">
           <h1>Account</h1>
-          <span className="account-badge">{user.tier}</span>
+          <span className={`account-badge ${isPlatformAdmin ? 'account-badge--admin' : ''}`}>{getUserTierLabel(user)}</span>
         </header>
+
+        <div className="account-section-toggle" role="tablist" aria-label="Account sections">
+          <button
+            type="button"
+            className={`account-section-tab ${currentSection === 'profile' ? 'active' : ''}`}
+            onClick={() => setSearchParams({ section: 'profile' })}
+          >
+            Profile
+          </button>
+          <button
+            type="button"
+            className={`account-section-tab ${currentSection === 'billing' ? 'active' : ''}`}
+            onClick={() => setSearchParams({ section: 'billing' })}
+          >
+            Plan & Billing
+          </button>
+        </div>
 
         <div className="account-section">
           <div className="account-row">
             <div className="account-field">
               <label>Name</label>
-              <div className="value">{user.name}</div>
+              {currentSection === 'profile' ? (
+                <input
+                  className="account-input"
+                  type="text"
+                  value={profileNameDraft}
+                  onChange={(event) => setProfileNameDraft(event.target.value)}
+                />
+              ) : (
+                <div className="value">{user.name}</div>
+              )}
             </div>
             <div className="account-field">
               <label>Email</label>
-              <div className="value">{user.email}</div>
+              {currentSection === 'profile' ? (
+                <input
+                  className="account-input"
+                  type="email"
+                  value={profileEmailDraft}
+                  onChange={(event) => setProfileEmailDraft(event.target.value)}
+                />
+              ) : (
+                <div className="value">{user.email}</div>
+              )}
             </div>
           </div>
 
           <div className="account-row">
             <div className="account-field">
               <label>Role</label>
-              <div className="value">{user.role.replace('_', ' ')}</div>
+              <div className="value">{getUserRoleLabel(user)}</div>
             </div>
             <div className="account-field">
               <label>Status</label>
@@ -134,6 +234,56 @@ export default function AccountPage() {
             </div>
           </div>
         </div>
+
+        {currentSection === 'profile' && (
+          <div className="account-actions account-actions--inline account-actions--profile">
+            <button type="button" className="primary-btn" onClick={handleSaveProfile} disabled={savingProfile}>
+              {savingProfile ? 'Saving...' : 'Save Profile'}
+            </button>
+          </div>
+        )}
+
+        {currentSection === 'billing' && (
+          <div className="billing-section">
+            {isPlatformAdmin ? (
+              <div className="account-admin-entitlement">
+                <h2>Platform Admin Access</h2>
+                <p>
+                  Platform Admin accounts carry universal entitlements across tournament, venue, channel, and broadcast workflows.
+                </p>
+                <div className="value">Effective feature tier: {effectiveTier.replace('_', '+')}</div>
+              </div>
+            ) : (
+              <>
+                <div className="billing-section-head">
+                  <h2>Plan Management</h2>
+                  <p>Select the plan you want active for product testing. Stripe checkout wiring can replace this flow later.</p>
+                </div>
+                <div className="billing-plan-grid">
+                  {SUBSCRIPTION_OPTIONS.map((option) => {
+                    const isCurrent = effectiveTier === option.tier;
+                    return (
+                      <article key={option.tier} className={`billing-plan-card ${isCurrent ? 'active' : ''}`}>
+                        <div className="billing-plan-copy">
+                          <strong>{option.name}</strong>
+                          <span>{option.detail}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className={isCurrent ? 'secondary-btn' : 'primary-btn'}
+                          onClick={() => void handleSelectSubscription(option.tier)}
+                          disabled={isCurrent || updatingSubscription === option.tier}
+                        >
+                          {isCurrent ? 'Current Plan' : updatingSubscription === option.tier ? 'Updating...' : `Switch to ${option.name}`}
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {isVenueAccount && (
           <div className="venue-channel-section">
@@ -248,9 +398,19 @@ export default function AccountPage() {
         {error && <p className="account-error">{error}</p>}
 
         <div className="account-actions">
-          <button type="button" className="primary-btn">
-            Manage Subscription
-          </button>
+          {isPlatformAdmin ? (
+            <Link to="/admin" className="primary-btn account-link-button">
+              Open Admin Console
+            </Link>
+          ) : (
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => setSearchParams({ section: 'billing' })}
+            >
+              Manage Subscription
+            </button>
+          )}
           <button type="button" className="secondary-btn" onClick={handleSignOut}>
             Sign Out
           </button>

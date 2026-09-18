@@ -55,6 +55,27 @@ export interface AuthSignUpResult {
   requiresEmailConfirmation: boolean;
 }
 
+function applyPlatformAdminOverrides(user: AppUser): AppUser {
+  if (user.role !== 'PLATFORM_ADMIN') {
+    return {
+      ...user,
+      permissions: normalizePermissions(user.permissions, user.role)
+    };
+  }
+
+  const mergedPermissions = Array.from(
+    new Set<PermissionName>([...ROLE_PERMISSIONS.PLATFORM_ADMIN, ...normalizePermissions(user.permissions, 'PLATFORM_ADMIN')])
+  );
+
+  return {
+    ...user,
+    tier: 'VENUE',
+    status: 'ACTIVE',
+    verified: true,
+    permissions: mergedPermissions
+  };
+}
+
 export const ROLE_PERMISSIONS: Record<UserRole, PermissionName[]> = {
   PLATFORM_ADMIN: [
     'platform.manage_users',
@@ -172,11 +193,12 @@ function normalizePermissions(value: unknown, role: UserRole): PermissionName[] 
 }
 
 function persistCurrentUser(user: AppUser): AppUser {
+  const normalizedUser = applyPlatformAdminOverrides(user);
   if (typeof window !== 'undefined') {
-    window.localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+    window.localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(normalizedUser));
   }
-  setSubscriptionTier(user.tier);
-  return user;
+  setSubscriptionTier(getEffectiveTier(normalizedUser));
+  return normalizedUser;
 }
 
 export function clearCurrentUser(): AppUser {
@@ -189,7 +211,7 @@ export function clearCurrentUser(): AppUser {
 
 function fromStoredUser(user: Partial<AppUser>): AppUser {
   const role = isValidRole(user.role) ? user.role : 'USER';
-  return {
+  return applyPlatformAdminOverrides({
     id: typeof user.id === 'string' && user.id.length > 0 ? user.id : DEFAULT_USER.id,
     name: typeof user.name === 'string' && user.name.length > 0 ? user.name : DEFAULT_USER.name,
     email: typeof user.email === 'string' ? user.email : DEFAULT_USER.email,
@@ -201,7 +223,7 @@ function fromStoredUser(user: Partial<AppUser>): AppUser {
     tdProfileId: typeof user.tdProfileId === 'string' ? user.tdProfileId : undefined,
     tdChannelId: typeof user.tdChannelId === 'number' ? user.tdChannelId : undefined,
     permissions: normalizePermissions(user.permissions, role)
-  };
+  });
 }
 
 const PLATFORM_ADMIN_EMAILS = ['info@promethean-games.com'];
@@ -223,7 +245,7 @@ function mapSupabaseUser(user: SupabaseUser): AppUser {
           : email?.split('@')[0] ?? 'User',
     email,
     role,
-    tier: isPlatformAdminUser ? 'PRO_PLUS' : isValidTier(appMetadata.tier) ? appMetadata.tier : 'BASIC',
+    tier: isPlatformAdminUser ? 'VENUE' : isValidTier(appMetadata.tier) ? appMetadata.tier : 'BASIC',
     status: isPlatformAdminUser ? 'ACTIVE' : isValidStatus(appMetadata.status) ? appMetadata.status : 'ACTIVE',
     verified: isPlatformAdminUser ? true : Boolean(appMetadata.verified),
     venueIds: normalizeVenueIds(appMetadata.venue_ids),
@@ -307,7 +329,19 @@ export const TIER_ENTITLEMENTS: Record<SubscriptionTier, PermissionName[]> = {
 };
 
 export function getEffectiveTier(user: AppUser | null | undefined): SubscriptionTier {
+  if (user?.role === 'PLATFORM_ADMIN') return 'VENUE';
   return user?.tier ?? 'BASIC';
+}
+
+export function getUserTierLabel(user: AppUser | null | undefined): string {
+  if (user?.role === 'PLATFORM_ADMIN') return 'Platform Admin';
+  const tier = getEffectiveTier(user);
+  return tier.replace('_', '+');
+}
+
+export function getUserRoleLabel(user: AppUser | null | undefined): string {
+  if (!user) return 'Guest';
+  return user.role.replace('_', ' ');
 }
 
 export async function initializeAuth(): Promise<AppUser> {
@@ -398,4 +432,63 @@ export async function signOutCurrentUser(): Promise<void> {
   }
 
   clearCurrentUser();
+}
+
+export async function updateCurrentUserProfile(name: string, email: string): Promise<AppUser> {
+  const currentUser = getCurrentUser();
+  const trimmedName = name.trim();
+  const trimmedEmail = email.trim();
+
+  if (!trimmedName) {
+    throw new Error('Name is required.');
+  }
+  if (!trimmedEmail) {
+    throw new Error('Email is required.');
+  }
+
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase.auth.updateUser({
+      email: trimmedEmail !== currentUser.email ? trimmedEmail : undefined,
+      data: {
+        name: trimmedName,
+        full_name: trimmedName
+      }
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    if (data.user) {
+      const mapped = mapSupabaseUser(data.user);
+      const merged = persistCurrentUser({
+        ...mapped,
+        name: trimmedName,
+        email: trimmedEmail !== currentUser.email ? mapped.email : trimmedEmail
+      });
+      return merged;
+    }
+  }
+
+  return persistCurrentUser({
+    ...currentUser,
+    name: trimmedName,
+    email: trimmedEmail
+  });
+}
+
+export async function updateCurrentUserSubscription(tier: SubscriptionTier): Promise<AppUser> {
+  const currentUser = getCurrentUser();
+  if (currentUser.role === 'PLATFORM_ADMIN') {
+    return persistCurrentUser(currentUser);
+  }
+
+  if (!isValidTier(tier)) {
+    throw new Error('Invalid subscription tier.');
+  }
+
+  return persistCurrentUser({
+    ...currentUser,
+    tier
+  });
 }

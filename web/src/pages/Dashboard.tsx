@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { getCurrentUser, getUserTierLabel } from '@/lib/auth';
 import { useTournamentStore } from '@/store/tournamentStore';
 import './Dashboard.css';
 
@@ -21,7 +22,9 @@ const dashboardMetricCatalog = [
 
 export default function Dashboard() {
   const { tournaments, fetchTournaments, loading } = useTournamentStore();
+  const currentUser = getCurrentUser();
   const [showMetricMenu, setShowMetricMenu] = useState(false);
+  const metricMenuRef = useRef<HTMLDivElement | null>(null);
   const [visibleMetrics, setVisibleMetrics] = useState<string[]>(() => {
     if (typeof window === 'undefined') {
       return DEFAULT_VISIBLE_METRICS;
@@ -56,6 +59,29 @@ export default function Dashboard() {
     const nextVisible = visibleMetrics.length > 0 ? visibleMetrics : DEFAULT_VISIBLE_METRICS;
     window.localStorage.setItem(DASHBOARD_METRICS_KEY, JSON.stringify(nextVisible));
   }, [visibleMetrics]);
+
+  useEffect(() => {
+    if (!showMetricMenu) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!metricMenuRef.current?.contains(event.target as Node)) {
+        setShowMetricMenu(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowMetricMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [showMetricMenu]);
 
   const quickActions = [
     { title: 'Create Tournament', subtitle: 'Start a new event', icon: '🏆', href: '/tournament/new' },
@@ -126,12 +152,20 @@ export default function Dashboard() {
         <div className="sidebar-card">
           <span className="title">Your plan</span>
           <div className="plan-row">
-            <div className="plan"><span>TD Pro+</span></div>
+            <div className="plan"><span>{getUserTierLabel(currentUser)}</span></div>
             <Link className="account-settings-link" to="/account" aria-label="Account settings">
               ⚙ Account
             </Link>
           </div>
-          <button className="upgrade-btn">Upgrade</button>
+          {currentUser.role === 'PLATFORM_ADMIN' ? (
+            <Link className="upgrade-btn upgrade-btn--link" to="/admin">
+              Open Admin Console
+            </Link>
+          ) : (
+            <Link className="upgrade-btn upgrade-btn--link" to="/account?section=billing">
+              Manage Plan
+            </Link>
+          )}
         </div>
       </aside>
 
@@ -143,11 +177,13 @@ export default function Dashboard() {
           </div>
 
           <div className="topbar-meta">
-            <div className="dashboard-metric-menu-wrap">
+            <div className="dashboard-metric-menu-wrap" ref={metricMenuRef}>
               <button
                 type="button"
                 className="settings-button"
                 aria-label="Customize dashboard metrics"
+                aria-expanded={showMetricMenu}
+                aria-haspopup="dialog"
                 onClick={() => setShowMetricMenu((current) => !current)}
                 title="Customize dashboard"
               >
@@ -155,17 +191,27 @@ export default function Dashboard() {
               </button>
 
               {showMetricMenu && (
-                <div className="dashboard-metric-menu" role="menu" aria-label="Dashboard metric visibility controls">
+                <div className="dashboard-metric-menu" role="dialog" aria-label="Dashboard metric visibility controls">
+                  <div className="dashboard-metric-menu-head">
+                    <strong>Dashboard Metrics</strong>
+                    <span>Choose what appears on your command view.</span>
+                  </div>
+                  <div className="dashboard-metric-menu-list">
                   {dashboardMetricCatalog.map((metric) => (
-                    <label key={metric.id} className="dashboard-metric-item" role="menuitemcheckbox" aria-checked={visibleMetrics.includes(metric.id)}>
+                    <label key={metric.id} className="dashboard-metric-item">
                       <input
                         type="checkbox"
                         checked={visibleMetrics.includes(metric.id)}
                         onChange={() => toggleMetric(metric.id)}
                       />
-                      <span>{metric.label}</span>
+                      <span className="dashboard-metric-checkbox" aria-hidden="true" />
+                      <span className="dashboard-metric-item-copy">
+                        <strong>{metric.label}</strong>
+                        <small>{metric.detail}</small>
+                      </span>
                     </label>
                   ))}
+                  </div>
 
                   <button type="button" className="dashboard-metric-reset" onClick={() => {
                     resetVisibleMetrics();

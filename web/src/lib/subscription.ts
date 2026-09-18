@@ -1,15 +1,34 @@
 export type SubscriptionTier = 'BASIC' | 'PRO' | 'PRO_PLUS' | 'VENUE';
 
 const STORAGE_KEY = 'tdiab_subscription_tier';
+const USER_STORAGE_KEY = 'tdiab_current_user';
 const VALID_TIERS: SubscriptionTier[] = ['BASIC', 'PRO', 'PRO_PLUS', 'VENUE'];
 
+function isValidTier(value: unknown): value is SubscriptionTier {
+  return VALID_TIERS.includes(value as SubscriptionTier);
+}
+
 export function getSubscriptionTier(): SubscriptionTier {
-  if (typeof window === 'undefined') return 'PRO_PLUS';
+  if (typeof window === 'undefined') return 'BASIC';
+  try {
+    const rawUser = localStorage.getItem(USER_STORAGE_KEY);
+    if (rawUser) {
+      const parsed = JSON.parse(rawUser) as { role?: string; tier?: unknown };
+      if (parsed.role === 'PLATFORM_ADMIN') {
+        return 'VENUE';
+      }
+      if (isValidTier(parsed.tier)) {
+        return parsed.tier;
+      }
+    }
+  } catch {
+    // fall through to direct tier storage
+  }
   const value = localStorage.getItem(STORAGE_KEY);
-  if (value && VALID_TIERS.includes(value as SubscriptionTier)) {
+  if (isValidTier(value)) {
     return value as SubscriptionTier;
   }
-  return 'PRO_PLUS';
+  return 'BASIC';
 }
 
 export function setSubscriptionTier(tier: SubscriptionTier): SubscriptionTier {
@@ -38,7 +57,7 @@ export function canCreateTemplates(tier: SubscriptionTier): boolean {
 }
 
 export function canConfigureTables(tier: SubscriptionTier): boolean {
-  return tier === 'PRO' || tier === 'PRO_PLUS' || tier === 'VENUE';
+  return VALID_TIERS.includes(tier);
 }
 
 export function canUseTdChannel(tier: SubscriptionTier): boolean {

@@ -44,6 +44,37 @@
   text-transform: uppercase;
 }
 
+.account-badge--admin {
+  background: rgba(95, 130, 255, 0.16);
+  border-color: rgba(95, 130, 255, 0.36);
+  color: #dfe7ff;
+}
+
+.account-section-toggle {
+  display: inline-flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding: 6px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.account-section-tab {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.account-section-tab.active {
+  background: rgba(255, 77, 89, 0.16);
+  color: #fff;
+}
+
 .account-section {
   display: grid;
   gap: 14px;
@@ -98,6 +129,52 @@
   padding: 14px;
   display: grid;
   gap: 12px;
+}
+
+.billing-section {
+  margin-top: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.billing-section-head h2,
+.account-admin-entitlement h2 {
+  margin: 0 0 6px;
+}
+
+.billing-section-head p,
+.account-admin-entitlement p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.74);
+}
+
+.billing-plan-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.billing-plan-card,
+.account-admin-entitlement {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.billing-plan-card.active {
+  border-color: rgba(255, 77, 89, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(255, 77, 89, 0.18);
+}
+
+.billing-plan-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.billing-plan-copy span {
+  color: rgba(255, 255, 255, 0.74);
 }
 
 .venue-channel-section h2,
@@ -176,6 +253,10 @@
 
 .account-actions--inline {
   margin-top: 0;
+}
+
+.account-actions--profile {
+  margin-top: 18px;
 }
 
 .account-actions .primary-btn,

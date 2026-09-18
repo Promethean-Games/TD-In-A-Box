@@ -122,6 +122,9 @@
 }
 
 .sidebar-card .upgrade-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   padding: 10px 12px;
   border: none;
@@ -130,6 +133,7 @@
   color: white;
   font-weight: 700;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .dashboard-main {
@@ -174,6 +178,268 @@
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.dashboard-metric-menu-wrap {
+  position: relative;
+}
+
+.dashboard-metric-menu {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 20;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: linear-gradient(180deg, rgba(13, 18, 26, 0.98), rgba(8, 12, 18, 0.96));
+  box-shadow: 0 24px 48px rgba(0,0,0,0.42);
+}
+
+.dashboard-metric-menu-head {
+  display: grid;
+  gap: 4px;
+}
+
+.dashboard-metric-menu-head strong {
+  color: #f7faff;
+  font-size: 0.98rem;
+}
+
+.dashboard-metric-menu-head span {
+  color: rgba(255,255,255,0.66);
+  font-size: 0.8rem;
+}
+
+.dashboard-metric-menu-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.dashboard-metric-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.03);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.15s ease;
+}
+
+.dashboard-metric-item:hover {
+  transform: translateY(-1px);
+  border-color: rgba(110, 169, 255, 0.25);
+  background: rgba(110, 169, 255, 0.08);
+}
+
+.dashboard-metric-item input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dashboard-metric-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.03);
+  position: relative;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.dashboard-metric-checkbox::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  width: 5px;
+  height: 9px;
+  border-right: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  transform: rotate(45deg);
+}
+
+.dashboard-metric-item input:checked + .dashboard-metric-checkbox {
+  background: linear-gradient(135deg, #ff4d5d, #d91f2d);
+  border-color: rgba(255,103,116,0.95);
+}
+
+.dashboard-metric-item input:checked + .dashboard-metric-checkbox::after {
+  border-right-color: #fff;
+  border-bottom-color: #fff;
+}
+
+.dashboard-metric-item-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dashboard-metric-item-copy strong {
+  color: #fff;
+  font-size: 0.92rem;
+}
+
+.dashboard-metric-item-copy small {
+  color: rgba(255,255,255,0.64);
+  font-size: 0.74rem;
+}
+
+.dashboard-metric-reset {
+  width: 100%;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: rgba(255,255,255,0.04);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dashboard-metric-reset:hover {
+  border-color: rgba(255,77,89,0.34);
+  background: rgba(255,77,89,0.1);
+}
+
+.dashboard-metric-menu-wrap {
+  position: relative;
+}
+
+.dashboard-metric-menu {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 20;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(13, 18, 26, 0.98), rgba(8, 12, 18, 0.96));
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.42);
+}
+
+.dashboard-metric-menu-head {
+  display: grid;
+  gap: 4px;
+}
+
+.dashboard-metric-menu-head strong {
+  color: #f7faff;
+  font-size: 0.98rem;
+}
+
+.dashboard-metric-menu-head span {
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.8rem;
+}
+
+.dashboard-metric-menu-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.dashboard-metric-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.15s ease;
+}
+
+.dashboard-metric-item:hover {
+  transform: translateY(-1px);
+  border-color: rgba(110, 169, 255, 0.25);
+  background: rgba(110, 169, 255, 0.08);
+}
+
+.dashboard-metric-item input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dashboard-metric-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.03);
+  position: relative;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.dashboard-metric-checkbox::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  width: 5px;
+  height: 9px;
+  border-right: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  transform: rotate(45deg);
+}
+
+.dashboard-metric-item input:checked + .dashboard-metric-checkbox {
+  background: linear-gradient(135deg, #ff4d5d, #d91f2d);
+  border-color: rgba(255, 103, 116, 0.95);
+}
+
+.dashboard-metric-item input:checked + .dashboard-metric-checkbox::after {
+  border-right-color: #fff;
+  border-bottom-color: #fff;
+}
+
+.dashboard-metric-item-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dashboard-metric-item-copy strong {
+  color: #fff;
+  font-size: 0.92rem;
+}
+
+.dashboard-metric-item-copy small {
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 0.74rem;
+}
+
+.dashboard-metric-reset {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dashboard-metric-reset:hover {
+  border-color: rgba(255, 77, 89, 0.34);
+  background: rgba(255, 77, 89, 0.1);
 }
 
 .prometheus-pill {

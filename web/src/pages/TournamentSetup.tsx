@@ -1,13 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { getCurrentUser, getEffectiveTier } from '@/lib/auth';
 import { useTournamentStore } from '@/store/tournamentStore';
 import { TournamentFormat, calculatePrizeContributionPerPlayer } from '@/lib/tournament';
 import {
-  canConfigureTables,
   canCreateTemplates,
   canUseModifiedElimination,
-  getModifiedEliminationRaceCap,
-  getSubscriptionTier
+  getModifiedEliminationRaceCap
 } from '@/lib/subscription';
 import './TournamentSetup.css';
 
@@ -38,6 +37,28 @@ const FORMATS: { value: TournamentFormat; label: string; description: string; ac
   }
 ];
 
+function FieldHint({ text }: { text: string }) {
+  return (
+    <span className="field-hint-wrap">
+      <span className="field-hint-trigger" tabIndex={0} aria-label={text}>
+        i
+      </span>
+      <span className="field-tooltip" role="tooltip">{text}</span>
+    </span>
+  );
+}
+
+function FieldLabel({ label, hint, htmlFor }: { label: string; hint: string; htmlFor?: string }) {
+  const content = (
+    <>
+      <span>{label}</span>
+      <FieldHint text={hint} />
+    </>
+  );
+
+  return htmlFor ? <label htmlFor={htmlFor} className="field-label-row">{content}</label> : <span className="field-label field-label-row">{content}</span>;
+}
+
 export default function TournamentSetup() {
   const navigate = useNavigate();
   const { createTournament } = useTournamentStore();
@@ -47,7 +68,7 @@ export default function TournamentSetup() {
   const [entryFee, setEntryFee] = useState<number>(0);
   const [greenFee, setGreenFee] = useState<number>(0);
   const [payoutPositions, setPayoutPositions] = useState<number>(3);
-  const [tableCount, setTableCount] = useState<number>(0);
+  const [tableCount, setTableCount] = useState<number>(1);
   const [isRaceMenuOpen, setIsRaceMenuOpen] = useState(false);
   const [winnersRaceTo, setWinnersRaceTo] = useState<number>(2);
   const [losersRaceTo, setLosersRaceTo] = useState<number>(1);
@@ -57,9 +78,8 @@ export default function TournamentSetup() {
   const [losersRaceToAfterShift, setLosersRaceToAfterShift] = useState<number>(1);
   const [saveAsTemplate, setSaveAsTemplate] = useState(false);
   const [loading, setLoading] = useState(false);
-  const subscriptionTier = getSubscriptionTier();
+  const subscriptionTier = getEffectiveTier(getCurrentUser());
   const canSaveTemplate = canCreateTemplates(subscriptionTier);
-  const canSetTableCount = canConfigureTables(subscriptionTier);
   const canSelectModifiedElimination = canUseModifiedElimination(subscriptionTier);
   const modifiedRaceCap = getModifiedEliminationRaceCap(subscriptionTier);
   const prizeContributionPerPlayer = calculatePrizeContributionPerPlayer(entryFee, greenFee);
@@ -67,13 +87,18 @@ export default function TournamentSetup() {
   const raceSummary = hasRaceShift
     ? `${winnersRaceTo}/${losersRaceTo} until round ${Math.max(2, raceShiftStartRound)}, then ${winnersRaceToAfterShift}/${losersRaceToAfterShift}`
     : `${winnersRaceTo}/${losersRaceTo} all event`;
+  const canSubmitTournament =
+    name.trim().length > 0 &&
+    Math.max(1, Math.min(100, Number(payoutPositions) || 1)) >= 1 &&
+    Math.max(1, Number(tableCount) || 1) >= 1 &&
+    (format !== 'MODIFIED_ELIMINATION' || canSelectModifiedElimination);
 
   const clampRace = (value: number) => Math.max(1, Math.min(modifiedRaceCap, Number(value) || 1));
   const clampShiftRound = (value: number) => Math.max(2, Math.floor(Number(value) || 2));
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
+    if (!canSubmitTournament) {
       alert('Tournament name required');
       return;
     }
@@ -93,7 +118,7 @@ export default function TournamentSetup() {
         entryFee: Number(entryFee) || 0,
         greenFee: Number(greenFee) || 0,
         payoutPositions: Math.max(1, Math.min(100, Number(payoutPositions) || 3)),
-        tableCount: canSetTableCount ? Math.max(0, Number(tableCount) || 0) : 0,
+        tableCount: Math.max(1, Number(tableCount) || 1),
         isTemplate: canSaveTemplate && saveAsTemplate,
         winnersRaceTo: format === 'MODIFIED_ELIMINATION' ? normalizedWinnersRace : 1,
         losersRaceTo: format === 'MODIFIED_ELIMINATION' ? normalizedLosersRace : 1,
@@ -122,7 +147,11 @@ export default function TournamentSetup() {
         <form onSubmit={handleSubmit} className="setup-form-card">
           <div className="form-grid">
             <div className="form-group">
-              <label htmlFor="name">Tournament Name *</label>
+              <FieldLabel
+                htmlFor="name"
+                label="Tournament Name *"
+                hint="This is the event name shown everywhere in the app, on the bracket, and on broadcast views."
+              />
               <input
                 id="name"
                 className="form-input"
@@ -135,7 +164,10 @@ export default function TournamentSetup() {
             </div>
 
             <div className="form-group">
-              <span className="field-label">Tournament Format *</span>
+              <FieldLabel
+                label="Tournament Format *"
+                hint="This determines the tournament rules and how players advance through the event."
+              />
               <button
                 type="button"
                 className="format-accordion-trigger"
@@ -189,7 +221,10 @@ export default function TournamentSetup() {
 
             {format === 'MODIFIED_ELIMINATION' && (
               <div className="form-group">
-                <span className="field-label">Modified Elimination Race Settings</span>
+                <FieldLabel
+                  label="Modified Elimination Race Settings"
+                  hint="These settings define the race length for winners-side and losers-side matches, including any later-round change."
+                />
                 <button
                   type="button"
                   className="format-accordion-trigger"
@@ -212,7 +247,10 @@ export default function TournamentSetup() {
                     </p>
                     <div className="race-input-grid">
                       <label className="form-group compact" title={`Each winners-side match requires this many game wins (max ${modifiedRaceCap}).`}>
-                        <span>Winners side race</span>
+                        <span className="field-label-row">
+                          <span>Winners side race</span>
+                          <FieldHint text="How many games a player must win to take a winners-side match." />
+                        </span>
                         <input
                           className="form-input"
                           type="number"
@@ -224,7 +262,10 @@ export default function TournamentSetup() {
                         />
                       </label>
                       <label className="form-group compact" title={`Each losers-side match requires this many game wins (max ${modifiedRaceCap}).`}>
-                        <span>Losers side race</span>
+                        <span className="field-label-row">
+                          <span>Losers side race</span>
+                          <FieldHint text="How many games a player must win to take a losers-side match." />
+                        </span>
                         <input
                           className="form-input"
                           type="number"
@@ -253,7 +294,10 @@ export default function TournamentSetup() {
                       <div className="race-shift-panel">
                         <div className="race-input-grid race-input-grid--shift">
                           <label className="form-group compact" title="These shorter races begin on this round and continue for the rest of the event.">
-                            <span>Switch starting round</span>
+                            <span className="field-label-row">
+                              <span>Switch starting round</span>
+                              <FieldHint text="The round number where the later race settings begin for the rest of the event." />
+                            </span>
                             <input
                               className="form-input"
                               type="number"
@@ -264,7 +308,10 @@ export default function TournamentSetup() {
                             />
                           </label>
                           <label className="form-group compact" title={`Winners-side race from round ${Math.max(2, raceShiftStartRound)} onward (max ${modifiedRaceCap}).`}>
-                            <span>Later winners race</span>
+                            <span className="field-label-row">
+                              <span>Later winners race</span>
+                              <FieldHint text="The winners-side race length after the switch round is reached." />
+                            </span>
                             <input
                               className="form-input"
                               type="number"
@@ -276,7 +323,10 @@ export default function TournamentSetup() {
                             />
                           </label>
                           <label className="form-group compact" title={`Losers-side race from round ${Math.max(2, raceShiftStartRound)} onward (max ${modifiedRaceCap}).`}>
-                            <span>Later losers race</span>
+                            <span className="field-label-row">
+                              <span>Later losers race</span>
+                              <FieldHint text="The losers-side race length after the switch round is reached." />
+                            </span>
                             <input
                               className="form-input"
                               type="number"
@@ -303,7 +353,11 @@ export default function TournamentSetup() {
 
             <div className="inline-field-grid">
               <div className="form-group compact">
-                <label htmlFor="entry-fee">Total Entry / Player</label>
+                <FieldLabel
+                  htmlFor="entry-fee"
+                  label="$ Total Entry / Player"
+                  hint="The full dollar amount each player pays to enter the event before any green fee is removed."
+                />
                 <input
                   id="entry-fee"
                   className="form-input"
@@ -316,7 +370,11 @@ export default function TournamentSetup() {
               </div>
 
               <div className="form-group compact">
-                <label htmlFor="green-fee">Green Fee / Player</label>
+                <FieldLabel
+                  htmlFor="green-fee"
+                  label="$ Green Fee / Player"
+                  hint="The dollar amount taken out of each entry for venue or administrative costs."
+                />
                 <input
                   id="green-fee"
                   className="form-input"
@@ -329,7 +387,11 @@ export default function TournamentSetup() {
               </div>
 
               <div className="form-group compact">
-                <label htmlFor="payout-positions">Payout Positions</label>
+                <FieldLabel
+                  htmlFor="payout-positions"
+                  label="Payout Positions"
+                  hint="How many finishing spots receive prize money when payouts are calculated."
+                />
                 <input
                   id="payout-positions"
                   className="form-input"
@@ -342,20 +404,22 @@ export default function TournamentSetup() {
                 />
               </div>
 
-              {canSetTableCount && (
-                <div className="form-group compact">
-                  <label htmlFor="table-count">Table Count</label>
-                  <input
-                    id="table-count"
-                    className="form-input"
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={tableCount}
-                    onChange={(e) => setTableCount(Math.max(0, Number(e.target.value || 0)))}
-                  />
-                </div>
-              )}
+              <div className="form-group compact">
+                <FieldLabel
+                  htmlFor="table-count"
+                  label="Table Count"
+                  hint="How many tables this tournament can actively use. The software uses this to know how many matches can be put on the floor at once."
+                />
+                <input
+                  id="table-count"
+                  className="form-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={tableCount}
+                  onChange={(e) => setTableCount(Math.max(1, Number(e.target.value || 1)))}
+                />
+              </div>
             </div>
 
             <div className="prize-pool-preview" role="status" aria-live="polite">
@@ -389,12 +453,16 @@ export default function TournamentSetup() {
           </div>
 
           <div className="form-actions">
-            <button type="submit" className="primary-btn" disabled={loading}>
-              {loading ? 'Creating...' : 'Create Tournament'}
-            </button>
-            <button type="button" className="secondary-btn" onClick={() => navigate('/')}>
-              Cancel
-            </button>
+          <button
+            type="submit"
+            className={`primary-btn create-tournament-btn ${canSubmitTournament ? 'ready' : ''}`}
+            disabled={loading || !canSubmitTournament}
+          >
+            {loading ? 'Creating...' : 'Create Tournament'}
+          </button>
+          <button type="button" className="secondary-btn" onClick={() => navigate('/')}>
+            Cancel
+          </button>
           </div>
         </form>
       </div>

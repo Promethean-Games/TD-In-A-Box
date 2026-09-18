@@ -1,11 +1,9 @@
 import { Link, useLocation } from 'react-router-dom';
-import { getCurrentUser, hasPermission } from '@/lib/auth';
-import { getSubscriptionTier } from '@/lib/subscription';
+import { getCurrentUser, getUserTierLabel, hasPermission } from '@/lib/auth';
 import './Navigation.css';
 
 export default function Navigation() {
   const location = useLocation();
-  const tier = getSubscriptionTier();
   const currentUser = getCurrentUser();
 
   const isActive = (paths: string[]) => {
@@ -32,7 +30,7 @@ export default function Navigation() {
         </nav>
 
         <div className="global-nav__meta">
-          <span className="tier-pill">{tier.replace('_', '+')}</span>
+          <span className="tier-pill">{getUserTierLabel(currentUser)}</span>
         </div>
       </div>
     </header>
