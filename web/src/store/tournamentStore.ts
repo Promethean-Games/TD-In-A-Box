@@ -40,6 +40,10 @@ export interface TournamentStore {
       raceShiftStartRound?: number | null;
       winnersRaceToAfterShift?: number;
       losersRaceToAfterShift?: number;
+      location?: string;
+      venueId?: string | null;
+      venueName?: string;
+      date?: string;
     }
   ) => Tournament;
   fetchTournaments: () => void;

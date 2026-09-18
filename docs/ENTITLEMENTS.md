@@ -289,16 +289,14 @@ Whenever a new paid feature is added, the developer must:
 
 Do not add a paid or gated feature without updating this document.
 
-## Current Implementation Conflicts (Audit Snapshot)
+## Current Implementation Status
 
-These are known discrepancies between the current codebase and this source-of-truth document. They are listed here so implementation drift is explicit.
+The current web entitlement implementation is expected to align to this document on the main paid-feature surfaces:
 
-1. **INTERNAL is not modeled as its own tier.** Current code coerces Platform Admin users into `VENUE` as an effective tier instead of a distinct internal entitlement level.
-2. **Roles currently grant paid-like capabilities directly.** Current role permission tables include tournament, branding, profile, and broadcast-related permissions independent of customer tier, which conflicts with the rule that roles and paid tiers are separate.
-3. **The current entitlement catalog is incomplete.** The code only defines a small subset of entitlement identifiers and does not yet define identifiers for modified elimination, chip tournament, race tracking, custom race formats, player database, universal player ID, sponsor controls, multi-camera, venue advertising, and usage-limit entitlements.
-4. **Usage limits are not centrally enforced.** Active tournament caps, saved-record caps, template counts, and account-count limits are not currently enforced through a centralized catalog.
-5. **Chip Tournament is currently exposed before the PRO gate is formalized.**
-6. **Basic history is underspecified in code.** The current implementation references a generic basic tournament limit and a Pro history entitlement, but does not yet cleanly encode the Basic history allowance defined here.
-7. **Current broadcast camera counts are implementation details, not source-of-truth policy.** The code currently uses per-tier camera caps that are not documented as canonical policy here.
-8. **Venue pricing currently drifts in UI.** This document defines VENUE at $24.99/month; billing UI must reflect that.
+- centralized entitlement definitions
+- INTERNAL access modeled separately from customer tiers
+- role and tier checks separated for gated product access
+- centralized tournament, template, history, and camera-limit policy
+- pricing UI aligned to the tier catalog
 
+If a future audit finds drift, add a new discrepancy list here until the implementation is brought back into alignment.

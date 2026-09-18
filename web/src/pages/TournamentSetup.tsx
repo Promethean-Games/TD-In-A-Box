@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCurrentUser, getEffectiveTier } from '@/lib/auth';
 import { useTournamentStore } from '@/store/tournamentStore';
@@ -10,6 +10,7 @@ import {
   getModifiedEliminationRaceCap,
   getTierLimit
 } from '@/lib/subscription';
+import { getChannelRegistry } from '@/lib/channel';
 import './TournamentSetup.css';
 
 const FORMATS: { value: TournamentFormat; label: string; description: string; accent: string }[] = [
@@ -79,8 +80,22 @@ export default function TournamentSetup() {
   const [winnersRaceToAfterShift, setWinnersRaceToAfterShift] = useState<number>(1);
   const [losersRaceToAfterShift, setLosersRaceToAfterShift] = useState<number>(1);
   const [saveAsTemplate, setSaveAsTemplate] = useState(false);
+  const [location, setLocation] = useState('');
+  const [venueId, setVenueId] = useState('');
+  const [venueName, setVenueName] = useState('');
+  const [eventDateTime, setEventDateTime] = useState('');
   const [loading, setLoading] = useState(false);
-  const accessTier = getEffectiveTier(getCurrentUser());
+  const currentUser = getCurrentUser();
+  const accessTier = getEffectiveTier(currentUser);
+  const venueOptions = useMemo(() => {
+    const channels = getChannelRegistry().filter((channel) => channel.type === 'VENUE' && channel.status === 'ACTIVE');
+    return channels.map((channel) => ({
+      id: channel.entityId,
+      label: channel.entityName,
+      location: channel.entityName,
+      channelNumber: channel.number
+    }));
+  }, []);
   const canSaveTemplate = canCreateTemplates(accessTier);
   const canSelectModifiedElimination = canUseModifiedElimination(accessTier);
   const canSelectChipTournament = canUseChipTournament(accessTier);
@@ -93,6 +108,7 @@ export default function TournamentSetup() {
     : `${winnersRaceTo}/${losersRaceTo} all event`;
   const canSubmitTournament =
     name.trim().length > 0 &&
+    location.trim().length > 0 &&
     Math.max(1, Math.min(100, Number(payoutPositions) || 1)) >= 1 &&
     Math.max(1, Number(tableCount) || 1) >= 1 &&
     (format !== 'MODIFIED_ELIMINATION' || canSelectModifiedElimination) &&
@@ -104,7 +120,7 @@ export default function TournamentSetup() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmitTournament) {
-      alert('Tournament name required');
+      alert('Tournament name and venue/location are required');
       return;
     }
     if (format === 'MODIFIED_ELIMINATION' && !canSelectModifiedElimination) {
@@ -123,6 +139,9 @@ export default function TournamentSetup() {
       const normalizedShiftRound = hasRaceShift ? clampShiftRound(raceShiftStartRound) : null;
       const normalizedWinnersRaceAfterShift = clampRace(winnersRaceToAfterShift);
       const normalizedLosersRaceAfterShift = clampRace(losersRaceToAfterShift);
+      const resolvedVenue = venueOptions.find((option) => option.id === venueId) ?? null;
+      const finalVenueName = resolvedVenue?.label || venueName.trim() || location.trim();
+      const finalLocation = resolvedVenue?.location || location.trim();
       const newTournament = createTournament(name, format, {
         entryFee: Number(entryFee) || 0,
         greenFee: Number(greenFee) || 0,
@@ -133,7 +152,11 @@ export default function TournamentSetup() {
         losersRaceTo: format === 'MODIFIED_ELIMINATION' ? normalizedLosersRace : 1,
         raceShiftStartRound: format === 'MODIFIED_ELIMINATION' ? normalizedShiftRound : null,
         winnersRaceToAfterShift: format === 'MODIFIED_ELIMINATION' ? normalizedWinnersRaceAfterShift : 1,
-        losersRaceToAfterShift: format === 'MODIFIED_ELIMINATION' ? normalizedLosersRaceAfterShift : 1
+        losersRaceToAfterShift: format === 'MODIFIED_ELIMINATION' ? normalizedLosersRaceAfterShift : 1,
+        location: finalLocation,
+        venueId: resolvedVenue?.id ?? (venueId || null),
+        venueName: finalVenueName,
+        date: eventDateTime ? new Date(eventDateTime).toISOString() : new Date().toISOString()
       });
       setTimeout(() => {
         navigate(`/tournament/${newTournament?.id ?? ''}`);
@@ -170,6 +193,46 @@ export default function TournamentSetup() {
                 onChange={(e) => setName(e.target.value)}
                 required
               />
+            </div>
+
+            <div className="form-group">
+              <FieldLabel
+                htmlFor="venue-select"
+                label="Tournament Location *"
+                hint="Pick the venue or create a custom location. Platform venue records are used for unified channel and historical tracking."
+              />
+              <select
+                id="venue-select"
+                className="form-input"
+                value={venueId}
+                onChange={(event) => {
+                  const nextVenueId = event.target.value;
+                  setVenueId(nextVenueId);
+                  const option = venueOptions.find((entry) => entry.id === nextVenueId);
+                  setVenueName(option?.label ?? '');
+                  setLocation(option?.location ?? '');
+                }}
+              >
+                <option value="">Select a venue or custom location</option>
+                {venueOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+                <option value="custom">Custom location</option>
+              </select>
+              {(!venueId || venueId === 'custom') && (
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Enter a custom venue or city location"
+                  value={location}
+                  onChange={(e) => {
+                    setLocation(e.target.value);
+                    setVenueName(e.target.value);
+                    setVenueId('custom');
+                  }}
+                  style={{ marginTop: 8 }}
+                />
+              )}
             </div>
 
             <div className="form-group">
@@ -365,6 +428,21 @@ export default function TournamentSetup() {
             )}
 
             <div className="inline-field-grid">
+              <div className="form-group compact">
+                <FieldLabel
+                  htmlFor="event-date-time"
+                  label="Tournament Date & Time"
+                  hint="Optional. Used for scheduling, coming-soon overlays, and live-event countdowns when a broadcast is live before the start time."
+                />
+                <input
+                  id="event-date-time"
+                  className="form-input"
+                  type="datetime-local"
+                  value={eventDateTime}
+                  onChange={(e) => setEventDateTime(e.target.value)}
+                />
+              </div>
+
               <div className="form-group compact">
                 <FieldLabel
                   htmlFor="entry-fee"

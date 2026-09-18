@@ -32,10 +32,10 @@ import {
   getChannelNamingConventionHelp
 } from '@/lib/channel';
 import {
-  getTierLimit,
-  PAYOUT_PERCENT_STEP,
+  getTierLimit
 } from '@/lib/subscription';
 import {
+  PAYOUT_PERCENT_STEP,
   TournamentSeedMode,
   buildDefaultPayoutPercentages,
   calculatePrizeContributionPerPlayer,
@@ -330,23 +330,40 @@ export default function Tournament() {
       }
       return;
     }
+
+    if (cameraInputMode === 'QR') {
+      if ((broadcastConfig.connectedCameraIds ?? []).includes('remote-phone')) {
+        setCameraConnectionState('CONNECTED');
+      }
+      return;
+    }
+
+    if (cameraInputMode === 'NETWORK') {
+      if (!canUseNetworkCamera) {
+        setCameraInputMode(canUseUsbCamera ? 'USB' : 'QR');
+        return;
+      }
+      const preferredNetworkCamera =
+        broadcastConfig.cameraList.find((camera) => camera.id === broadcastConfig.cameraId && camera.type === 'NETWORK') ??
+        broadcastConfig.cameraList.find((camera) => camera.type === 'NETWORK') ??
+        null;
+      if (preferredNetworkCamera) {
+        setNetworkCameraName(preferredNetworkCamera.name);
+        setNetworkCameraUrl(preferredNetworkCamera.streamUrl ?? '');
+      }
+      return;
+    }
+
     const preferredCamera =
       broadcastConfig.cameraList.find((camera) => camera.id === broadcastConfig.cameraId) ??
-      broadcastConfig.cameraList.find((camera) => camera.type === 'USB' || camera.type === 'OBS' || camera.type === 'NETWORK') ??
+      broadcastConfig.cameraList.find((camera) => camera.type === 'USB' || camera.type === 'OBS') ??
       broadcastConfig.cameraList[0];
     if (!preferredCamera) return;
-    if (preferredCamera.type === 'NETWORK') {
-      setCameraInputMode('NETWORK');
-      setNetworkCameraName(preferredCamera.name);
-      setNetworkCameraUrl(preferredCamera.streamUrl ?? '');
-    } else {
-      setCameraInputMode('USB');
-      if (!cameraSourceId) setCameraSourceId(preferredCamera.id);
-    }
     if (broadcastConfig.cameraId && broadcastConfig.cameraId === preferredCamera.id) {
       setCameraConnectionState('CONNECTED');
     }
-  }, [broadcastConfig.cameraId, broadcastConfig.cameraList, cameraSourceId]);
+    if (!cameraSourceId) setCameraSourceId(preferredCamera.id);
+  }, [broadcastConfig.cameraId, broadcastConfig.cameraList, broadcastConfig.connectedCameraIds, cameraInputMode, cameraSourceId, canUseNetworkCamera, canUseUsbCamera]);
   useEffect(() => {
     if (workflowTab !== 'BROADCAST' || !canUseUsbCamera || usbAndCaptureSources.length > 0) return;
     void syncCameraInventory();

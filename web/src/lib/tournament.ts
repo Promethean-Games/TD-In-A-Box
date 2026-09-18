@@ -61,6 +61,9 @@ export interface Tournament {
   winnersRaceToAfterShift: number;
   losersRaceToAfterShift: number;
   payouts: PayoutBreakdown[];
+  location?: string;
+  venueId?: string | null;
+  venueName?: string;
   date?: string;
   createdAt: string;
   updatedAt: string;
@@ -382,6 +385,9 @@ export function normalizeTournament(tournament: Partial<Tournament> | null | und
       format === 'MODIFIED_ELIMINATION' ? defaultRaceSettings.losersRaceToAfterShift : 1
     ),
     payouts: Array.isArray(tournament.payouts) ? tournament.payouts : [],
+    location: typeof tournament.location === 'string' && tournament.location.trim().length > 0 ? tournament.location.trim() : undefined,
+    venueId: typeof tournament.venueId === 'string' && tournament.venueId.trim().length > 0 ? tournament.venueId : null,
+    venueName: typeof tournament.venueName === 'string' && tournament.venueName.trim().length > 0 ? tournament.venueName.trim() : undefined,
     date: typeof tournament.date === 'string' && tournament.date ? tournament.date : undefined,
     createdAt: String(tournament.createdAt ?? new Date().toISOString()),
     updatedAt: String(tournament.updatedAt ?? new Date().toISOString())
@@ -439,6 +445,10 @@ class TournamentDatabase {
       raceShiftStartRound?: number | null;
       winnersRaceToAfterShift?: number;
       losersRaceToAfterShift?: number;
+      location?: string;
+      venueId?: string | null;
+      venueName?: string;
+      date?: string;
     } = {}
   ): Tournament {
     const defaultRaceSettings = getDefaultRaceSettingsForFormat(format);
@@ -484,7 +494,10 @@ class TournamentDatabase {
             )
           : 1,
       payouts: [],
-      date: new Date().toISOString(),
+      location: typeof config.location === 'string' && config.location.trim().length > 0 ? config.location.trim() : undefined,
+      venueId: typeof config.venueId === 'string' && config.venueId.trim().length > 0 ? config.venueId : null,
+      venueName: typeof config.venueName === 'string' && config.venueName.trim().length > 0 ? config.venueName.trim() : undefined,
+      date: typeof config.date === 'string' && config.date ? config.date : new Date().toISOString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
