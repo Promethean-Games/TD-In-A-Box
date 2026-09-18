@@ -68,6 +68,7 @@ export default function TournamentSetup() {
   const [name, setName] = useState('');
   const [format, setFormat] = useState<TournamentFormat>('SINGLE_ELIMINATION');
   const [isFormatMenuOpen, setIsFormatMenuOpen] = useState(false);
+  const [isLocationMenuOpen, setIsLocationMenuOpen] = useState(false);
   const [entryFee, setEntryFee] = useState<number>(0);
   const [greenFee, setGreenFee] = useState<number>(0);
   const [payoutPositions, setPayoutPositions] = useState<number>(3);
@@ -103,6 +104,9 @@ export default function TournamentSetup() {
   const templateLimit = getTierLimit(accessTier, 'templates');
   const prizeContributionPerPlayer = calculatePrizeContributionPerPlayer(entryFee, greenFee);
   const selectedFormat = FORMATS.find((option) => option.value === format) ?? FORMATS[0];
+  const selectedLocationLabel =
+    venueOptions.find((option) => option.id === venueId)?.label ??
+    (venueId === 'custom' ? 'Custom location' : 'Select a venue or custom location');
   const raceSummary = hasRaceShift
     ? `${winnersRaceTo}/${losersRaceTo} until round ${Math.max(2, raceShiftStartRound)}, then ${winnersRaceToAfterShift}/${losersRaceToAfterShift}`
     : `${winnersRaceTo}/${losersRaceTo} all event`;
@@ -158,9 +162,11 @@ export default function TournamentSetup() {
         venueName: finalVenueName,
         date: eventDateTime ? new Date(eventDateTime).toISOString() : new Date().toISOString()
       });
-      setTimeout(() => {
-        navigate(`/tournament/${newTournament?.id ?? ''}`);
-      }, 100);
+      if (!newTournament || !newTournament.id) {
+        throw new Error('Tournament could not be created.');
+      }
+      setLoading(false);
+      navigate(`/tournament/${newTournament.id}`, { replace: true });
     } catch (error) {
       alert(`Error: ${error}`);
     } finally {
@@ -197,28 +203,68 @@ export default function TournamentSetup() {
 
             <div className="form-group">
               <FieldLabel
-                htmlFor="venue-select"
                 label="Tournament Location *"
                 hint="Pick the venue or create a custom location. Platform venue records are used for unified channel and historical tracking."
               />
-              <select
-                id="venue-select"
-                className="form-input"
-                value={venueId}
-                onChange={(event) => {
-                  const nextVenueId = event.target.value;
-                  setVenueId(nextVenueId);
-                  const option = venueOptions.find((entry) => entry.id === nextVenueId);
-                  setVenueName(option?.label ?? '');
-                  setLocation(option?.location ?? '');
-                }}
+              <button
+                type="button"
+                className="format-accordion-trigger location-accordion-trigger"
+                onClick={() => setIsLocationMenuOpen((current) => !current)}
+                aria-expanded={isLocationMenuOpen}
+                aria-controls="location-accordion-panel"
               >
-                <option value="">Select a venue or custom location</option>
-                {venueOptions.map((option) => (
-                  <option key={option.id} value={option.id}>{option.label}</option>
-                ))}
-                <option value="custom">Custom location</option>
-              </select>
+                <span className="format-accordion-copy">
+                  <strong>{selectedLocationLabel}</strong>
+                </span>
+                <span className="format-accordion-chevron" aria-hidden="true">
+                  {isLocationMenuOpen ? '▲' : '▼'}
+                </span>
+              </button>
+
+              {isLocationMenuOpen && (
+                <div id="location-accordion-panel" className="format-accordion-panel location-accordion-panel" role="listbox" aria-label="Tournament location selection">
+                  <button
+                    type="button"
+                    className={`format-tile ${!venueId ? 'active' : ''}`}
+                    onClick={() => {
+                      setVenueId('');
+                      setVenueName('');
+                      setLocation('');
+                      setIsLocationMenuOpen(false);
+                    }}
+                  >
+                    <span className="format-label">Select a venue or custom location</span>
+                  </button>
+                  {venueOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`format-tile ${venueId === option.id ? 'active' : ''}`}
+                      onClick={() => {
+                        setVenueId(option.id);
+                        setVenueName(option.label);
+                        setLocation(option.location);
+                        setIsLocationMenuOpen(false);
+                      }}
+                    >
+                      <span className="format-label">{option.label}</span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={`format-tile ${venueId === 'custom' ? 'active' : ''}`}
+                    onClick={() => {
+                      setVenueId('custom');
+                      setVenueName(location || 'Custom location');
+                      setLocation(location);
+                      setIsLocationMenuOpen(false);
+                    }}
+                  >
+                    <span className="format-label">Custom location</span>
+                  </button>
+                </div>
+              )}
+
               {(!venueId || venueId === 'custom') && (
                 <input
                   className="form-input"

@@ -98,6 +98,7 @@ export default function Tournament() {
   const { id } = useParams<{ id: string }>();
   const {
     currentTournament,
+    setCurrentTournament,
     fetchTournament,
     addPlayer,
     removePlayer,
@@ -156,8 +157,15 @@ export default function Tournament() {
   const cameraPairUrl = cameraPairCode ? getAppRouteUrl(`/camera-link/${cameraPairCode}`) : '';
 
   useEffect(() => {
-    if (id) fetchTournament(id);
-  }, [id]);
+    if (!id) {
+      setCurrentTournament(null);
+      clearError();
+      return;
+    }
+
+    clearError();
+    fetchTournament(id);
+  }, [clearError, fetchTournament, id, setCurrentTournament]);
 
   useEffect(() => {
     if (!currentTournament) return;
@@ -642,7 +650,18 @@ export default function Tournament() {
     return entryOrderIds;
   }, [currentTournament?.bracketGenerated, entryOrderIds, manualOrder, normalizeManualSeedIds, players, savedSeedIds, seedingMode]);
   if (!currentTournament) {
-    return <div className="tournament-page"><p>Loading tournament...</p></div>;
+    return (
+      <div className="tournament-page tournament-page--empty">
+        <div className="empty-state-card">
+          <span className="eyebrow">Tournament</span>
+          <h1>{error ? 'Tournament unavailable' : 'Loading tournament...'}</h1>
+          <p>
+            {error || 'Opening the selected event and preparing the bracket workspace.'}
+          </p>
+          <Link className="primary-btn" to="/tournaments">Back to tournaments</Link>
+        </div>
+      </div>
+    );
   }
 
   const movePlayerWithinOrder = (order: string[], playerId: string, direction: -1 | 1) => {

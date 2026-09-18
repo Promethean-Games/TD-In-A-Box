@@ -172,6 +172,11 @@
   min-height: 72px;
 }
 
+.location-accordion-trigger {
+  min-height: 58px;
+  padding-block: 14px;
+}
+
 .format-accordion-copy {
   display: grid;
   gap: 4px;
@@ -196,6 +201,15 @@
   display: grid;
   gap: 10px;
   margin-top: 8px;
+}
+
+.location-accordion-panel {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(10, 15, 22, 0.9);
 }
 
 .inline-field-grid {

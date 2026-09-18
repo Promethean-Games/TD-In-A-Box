@@ -109,6 +109,9 @@ export const useTournamentStore = create<TournamentStore>()(
             }
 
             const tournament = db.create(name, format, config);
+            if (!tournament || !tournament.id) {
+              throw new Error('Tournament creation returned no valid record.');
+            }
             set((state) => ({
               tournaments: [tournament, ...state.tournaments],
               currentTournament: tournament,
