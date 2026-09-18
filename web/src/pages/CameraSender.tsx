@@ -137,21 +137,21 @@ export default function CameraSender() {
     console.debug('[camera-sender] start connect', { pairCode: normalizedPairCode, diagnostics: pairDiagnostics });
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 60 }
-        },
+        video: { facingMode: { ideal: 'environment' } },
         audio: false
       });
+      if (!stream.getVideoTracks().length) {
+        throw new Error('No video track was produced by the selected camera. Try another camera or browser.');
+      }
       streamRef.current = stream;
       if (previewRef.current) {
         previewRef.current.srcObject = stream;
+        previewRef.current.muted = true;
+        previewRef.current.playsInline = true;
         try {
           await previewRef.current.play();
         } catch {
-          // autoplay can be blocked by browser policy
+          setStatus('Camera is active but browser autoplay is blocked.');
         }
       }
 

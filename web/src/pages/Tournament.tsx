@@ -1248,8 +1248,11 @@ export default function Tournament() {
       const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
       pairPeerRef.current = peer;
       peer.ontrack = (event) => {
-        const incomingStream = event.streams?.[0];
-        if (!incomingStream) return;
+        const incomingStream = event.streams?.[0] ?? new MediaStream();
+        if (!event.streams?.[0] && event.track) {
+          incomingStream.addTrack(event.track);
+        }
+        if (!incomingStream.getTracks().length) return;
         stopActiveCameraStream();
         activeCameraStreamRef.current = incomingStream;
         setActivePreviewStream(incomingStream);
