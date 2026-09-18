@@ -14,7 +14,6 @@ import {
   Play,
   SlidersHorizontal,
   Trophy,
-  UserRound,
   Users,
   Video
 } from 'lucide-react';
@@ -75,7 +74,7 @@ const BROADCAST_UPSELL_FEATURES = [
   { title: 'Tournament Templates', detail: 'Save your setup and run the room faster next time.', icon: Layers3 },
   { title: 'Custom Race Formats', detail: 'Dial in the ruleset your event actually needs.', icon: SlidersHorizontal },
   { title: 'Tournament History', detail: 'Keep past events, stats, and repeatable workflows.', icon: BarChart3 },
-  { title: 'TD Profile', detail: 'Build a recognizable operator identity around your events.', icon: UserRound }
+  { title: 'TD Profile', detail: 'Build a recognizable operator identity around your events.', icon: Users }
 ] as const;
 
 function formatLabel(value: string): string {
