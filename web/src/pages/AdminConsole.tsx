@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 interface AdminEntityRecord {
   id: string;
@@ -122,7 +122,7 @@ const adminSections = [
 
 const nestedAdminNavigation = {
   People: ['Users', 'TDs', 'Venues', 'Players'],
-  Tournaments: ['All Tournaments', 'Live Now', 'Recent'],
+  Tournaments: ['All Tournaments', 'My Tournaments', 'Live Now', 'Recent'],
   TDTV: ['Network', 'Channels', 'Live Broadcasts'],
   Billing: ['Subscriptions', 'Entitlements'],
   System: ['Activity / Audit Log', 'System Health', 'Settings']
@@ -157,6 +157,7 @@ function getAdminEventTone(status: 'DRAFT' | 'READY' | 'ACTIVE' | 'COMPLETED'): 
 
 export default function AdminConsole() {
   const currentUser = getCurrentUser();
+  const navigate = useNavigate();
   const { tournaments } = useTournamentStore();
   const [activeSection, setActiveSection] = useState<AdminSectionId>('overview');
   const [showMetricMenu, setShowMetricMenu] = useState(false);
@@ -483,7 +484,18 @@ export default function AdminConsole() {
               {section.id === 'people' || section.id === 'events' || section.id === 'tdtv' || section.id === 'billing' || section.id === 'system' ? (
                 <div className="admin-subnav">
                   {nestedAdminNavigation[section.label as keyof typeof nestedAdminNavigation].map((item) => (
-                    <button key={`${section.id}-${item}`} type="button" className="admin-subnav-item">
+                    <button
+                      key={`${section.id}-${item}`}
+                      type="button"
+                      className="admin-subnav-item"
+                      onClick={() => {
+                        if (item === 'My Tournaments') {
+                          navigate('/tournaments');
+                          return;
+                        }
+                        setActiveSection(section.id);
+                      }}
+                    >
                       {item}
                     </button>
                   ))}
