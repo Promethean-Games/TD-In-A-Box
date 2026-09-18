@@ -1,0 +1,432 @@
+.tournament-setup {
+  min-height: calc(100vh - 48px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+.setup-container {
+  width: min(100%, 980px);
+  color: white;
+}
+
+.setup-header {
+  margin-bottom: 28px;
+}
+
+.eyebrow {
+  display: inline-block;
+  margin-bottom: 10px;
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #8ed2ff;
+  font-weight: 800;
+}
+
+.setup-title {
+  margin: 0;
+  font-size: clamp(2.6rem, 5vw, 4.4rem);
+  line-height: 0.96;
+  letter-spacing: -0.08em;
+  font-weight: 900;
+  color: #f5f7fb;
+}
+
+.setup-subtitle {
+  margin: 12px 0 0;
+  font-size: 1.1rem;
+  color: rgba(255,255,255,0.7);
+}
+
+.setup-form-card {
+  background: rgba(10, 15, 21, 0.84);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 22px;
+  padding: 24px 18px 18px;
+  max-width: 760px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 24px 60px rgba(0,0,0,0.35);
+}
+
+.form-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.form-group {
+  display: grid;
+  gap: 10px;
+}
+
+.form-group label {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #f4f7fb;
+}
+
+.field-label {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #f4f7fb;
+}
+
+.form-input,
+.form-select {
+  width: 100%;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  color: white;
+  padding: 16px 16px;
+  font-size: 1.05rem;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-input::placeholder {
+  color: rgba(255,255,255,0.45);
+}
+
+.form-input:focus,
+.form-select:focus {
+  border-color: rgba(255, 77, 89, 0.8);
+  box-shadow: 0 0 0 4px rgba(255, 77, 89, 0.08);
+}
+
+.format-accordion-trigger {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: white;
+  padding: 14px 16px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.format-accordion-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.format-accordion-copy strong {
+  font-size: 1rem;
+}
+
+.format-accordion-copy small {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.8rem;
+}
+
+.format-accordion-chevron {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.format-accordion-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.inline-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.form-group.compact {
+  margin: 0;
+}
+
+.prize-pool-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.prize-pool-preview .label {
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.prize-pool-preview strong {
+  font-size: clamp(1.2rem, 3vw, 1.9rem);
+  color: #f7fafc;
+}
+
+.prize-pool-preview small {
+  flex-basis: 100%;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.template-toggle-row {
+  margin-top: 2px;
+}
+
+.template-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.template-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle-indicator {
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  position: relative;
+  transition: background-color 0.2s ease;
+}
+
+.toggle-indicator::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s ease;
+}
+
+.template-toggle input:checked + .toggle-indicator {
+  background: rgba(255, 77, 89, 0.75);
+}
+
+.template-toggle input:checked + .toggle-indicator::after {
+  transform: translateX(20px);
+}
+
+.toggle-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.toggle-copy strong {
+  font-size: 0.98rem;
+}
+
+.toggle-copy small {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.78rem;
+}
+
+.format-tile {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 18px 18px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: white;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.format-tile:hover {
+  transform: translateY(-1px);
+}
+
+.format-tile.active {
+  border-color: rgba(255, 93, 104, 0.95);
+  box-shadow: 0 0 0 2px rgba(255, 93, 104, 0.45), 0 0 20px rgba(255, 93, 104, 0.45);
+  animation: pulseGlow 1.7s ease-in-out infinite;
+}
+
+.format-tile.locked {
+  opacity: 0.58;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
+.format-lock-note {
+  margin-top: 2px;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ffd799;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgba(255, 93, 104, 0.3), 0 0 14px rgba(255, 93, 104, 0.18);
+  }
+  50% {
+    box-shadow: 0 0 0 2px rgba(255, 93, 104, 0.7), 0 0 24px rgba(255, 93, 104, 0.5);
+  }
+}
+
+.format-label {
+  font-size: 1.08rem;
+  font-weight: 800;
+}
+
+.format-description {
+  font-size: 0.82rem;
+  color: rgba(255,255,255,0.72);
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.race-accordion-panel {
+  margin-top: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.race-help-copy {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.85rem;
+}
+
+.race-input-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.race-cap-note {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.78rem;
+}
+
+.race-shift-toggle {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.race-shift-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.race-shift-toggle input:checked + .toggle-indicator {
+  background: rgba(255, 77, 89, 0.75);
+}
+
+.race-shift-toggle input:checked + .toggle-indicator::after {
+  transform: translateX(20px);
+}
+
+.race-shift-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(6, 11, 18, 0.6);
+}
+
+.race-input-grid--shift {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.primary-btn,
+.secondary-btn {
+  border: none;
+  border-radius: 12px;
+  padding: 14px 22px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.primary-btn {
+  background: linear-gradient(135deg, #ff4d5d, #d91f2d);
+  color: white;
+  box-shadow: 0 18px 34px rgba(233, 53, 73, 0.3);
+}
+
+.primary-btn:hover,
+.secondary-btn:hover {
+  transform: translateY(-1px);
+}
+
+.secondary-btn {
+  background: rgba(255,255,255,0.06);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+.primary-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+@media (max-width: 640px) {
+  .setup-title {
+    font-size: 2.6rem;
+  }
+
+  .inline-field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .race-input-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-actions {
+    flex-direction: column;
+  }
+
+  .template-toggle {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .primary-btn,
+  .secondary-btn {
+    width: 100%;
+  }
+}

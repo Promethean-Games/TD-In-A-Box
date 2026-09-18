@@ -1,0 +1,241 @@
+.account-page {
+  min-height: calc(100vh - 72px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background:
+    linear-gradient(180deg, rgba(8, 12, 18, 0.45), rgba(8, 12, 18, 0.7)),
+    url('/images/account-background.png') center/cover no-repeat;
+}
+
+.account-card {
+  width: min(100%, 620px);
+  background: rgba(12, 16, 22, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  padding: 26px 24px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+}
+
+.account-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.account-header h1 {
+  margin: 0;
+  font-size: clamp(2rem, 3vw, 2.8rem);
+  letter-spacing: -0.06em;
+}
+
+.account-badge {
+  border-radius: 999px;
+  background: rgba(255, 77, 89, 0.12);
+  border: 1px solid rgba(255, 77, 89, 0.2);
+  color: #ffdfe3;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.account-section {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.account-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.account-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.account-field label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.7);
+}
+
+.account-field .value {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: white;
+}
+
+.account-input,
+.account-select {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: white;
+}
+
+.account-select option {
+  color: #0f141c;
+}
+
+.venue-channel-section {
+  margin-top: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.venue-channel-section h2,
+.venue-request-panel h3 {
+  margin: 0;
+}
+
+.venue-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metric-chip {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(6, 10, 16, 0.6);
+  display: grid;
+  gap: 4px;
+}
+
+.metric-chip span {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.metric-chip strong {
+  font-size: 1rem;
+}
+
+.venue-request-panel {
+  border-top: 1px dashed rgba(255, 255, 255, 0.16);
+  padding-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.request-list {
+  display: grid;
+  gap: 6px;
+}
+
+.request-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.request-row span {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.88rem;
+}
+
+.request-row em {
+  font-style: normal;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.account-actions--inline {
+  margin-top: 0;
+}
+
+.account-actions .primary-btn,
+.account-actions .secondary-btn {
+  flex: 1 1 180px;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.account-actions .primary-btn {
+  background: linear-gradient(135deg, #ff4d5d, #da2636);
+  border: none;
+  color: white;
+}
+
+.account-actions .secondary-btn {
+  background: rgba(255,255,255,0.03);
+  color: white;
+}
+
+.account-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.account-error {
+  margin: 18px 0 0;
+  color: #ff9faa;
+}
+
+.account-notice {
+  margin: 18px 0 0;
+  color: #8bf3c1;
+}
+
+.account-muted {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.74);
+}
+
+@media (max-width: 620px) {
+  .account-card {
+    padding: 22px 18px;
+  }
+
+  .account-row {
+    grid-template-columns: 1fr;
+  }
+
+  .venue-metrics-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .account-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

@@ -1,0 +1,50 @@
+.camera-sender-page {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.camera-sender-header h1 {
+  margin: 0.3rem 0 0.5rem;
+}
+
+.camera-sender-eyebrow {
+  margin: 0;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  color: var(--color-text-dim, #94a3b8);
+}
+
+.camera-sender-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.camera-sender-status {
+  border: 1px solid var(--color-border, #334155);
+  border-radius: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--color-panel-soft, #0f172a);
+}
+
+.camera-sender-error {
+  margin: 0;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.35);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: 0.6rem;
+  padding: 0.75rem 0.9rem;
+}
+
+.camera-sender-preview {
+  width: 100%;
+  border-radius: 0.8rem;
+  border: 1px solid var(--color-border, #334155);
+  background: #000;
+  max-height: 62vh;
+}
