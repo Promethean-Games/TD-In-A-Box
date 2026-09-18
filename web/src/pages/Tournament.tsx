@@ -380,15 +380,19 @@ export default function Tournament() {
   useEffect(() => {
     if (broadcastConfig.cameraId === 'remote-phone') {
       setCameraInputMode('QR');
-      if ((broadcastConfig.connectedCameraIds ?? []).includes('remote-phone')) {
+      if ((broadcastConfig.connectedCameraIds ?? []).includes('remote-phone') && activePreviewStream) {
         setCameraConnectionState('CONNECTED');
+      } else if (cameraConnectionState !== 'DISCONNECTED') {
+        setCameraConnectionState('DISCONNECTED');
       }
       return;
     }
 
     if (cameraInputMode === 'QR') {
-      if ((broadcastConfig.connectedCameraIds ?? []).includes('remote-phone')) {
+      if ((broadcastConfig.connectedCameraIds ?? []).includes('remote-phone') && activePreviewStream) {
         setCameraConnectionState('CONNECTED');
+      } else if (cameraConnectionState !== 'DISCONNECTED') {
+        setCameraConnectionState('DISCONNECTED');
       }
       return;
     }
@@ -409,6 +413,11 @@ export default function Tournament() {
       if (broadcastConfig.cameraId && broadcastConfig.cameraId !== 'remote-phone') {
         setCameraSourceId(broadcastConfig.cameraId);
       }
+      if (activePreviewStream && (broadcastConfig.connectedCameraIds ?? []).includes(broadcastConfig.cameraId)) {
+        setCameraConnectionState('CONNECTED');
+      } else if (cameraConnectionState !== 'DISCONNECTED') {
+        setCameraConnectionState('DISCONNECTED');
+      }
       return;
     }
 
@@ -419,8 +428,10 @@ export default function Tournament() {
         broadcastConfig.cameraList[0];
       if (!preferredCamera) return;
       if (!cameraSourceId) setCameraSourceId(preferredCamera.id);
-      if (broadcastConfig.cameraId && broadcastConfig.cameraId === preferredCamera.id) {
+      if (activePreviewStream && broadcastConfig.cameraId === preferredCamera.id) {
         setCameraConnectionState('CONNECTED');
+      } else if (cameraConnectionState !== 'DISCONNECTED') {
+        setCameraConnectionState('DISCONNECTED');
       }
       return;
     }
@@ -431,7 +442,12 @@ export default function Tournament() {
       broadcastConfig.cameraList[0];
     if (!preferredCamera) return;
     if (!cameraSourceId) setCameraSourceId(preferredCamera.id);
-  }, [broadcastConfig.cameraId, broadcastConfig.cameraList, broadcastConfig.connectedCameraIds, cameraInputMode, cameraSourceId, canUseNetworkCamera, canUseUsbCamera]);
+    if (activePreviewStream && (broadcastConfig.connectedCameraIds ?? []).includes(preferredCamera.id)) {
+      setCameraConnectionState('CONNECTED');
+    } else if (cameraConnectionState !== 'DISCONNECTED') {
+      setCameraConnectionState('DISCONNECTED');
+    }
+  }, [activePreviewStream, broadcastConfig.cameraId, broadcastConfig.cameraList, broadcastConfig.connectedCameraIds, cameraConnectionState, cameraInputMode, cameraSourceId, canUseNetworkCamera, canUseUsbCamera]);
   useEffect(() => {
     if (workflowTab !== 'BROADCAST' || !canUseUsbCamera || usbAndCaptureSources.length > 0) return;
     void syncCameraInventory();
@@ -533,17 +549,29 @@ export default function Tournament() {
     if (cameraInputMode === 'QR' || !selectedCameraSource) return;
     if (cameraConnectionState === 'CONNECTED' && activeCameraStreamRef.current && previewVideoRef.current) return;
 
+    const attachAndPlayPreview = async (video: HTMLVideoElement, stream: MediaStream | string) => {
+      video.srcObject = stream instanceof MediaStream ? stream : null;
+      if (typeof stream === 'string') {
+        video.src = stream;
+      }
+      video.muted = true;
+      video.playsInline = true;
+      video.load();
+
+      try {
+        await video.play();
+        setCameraError(null);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'browser policy blocked autoplay';
+        setCameraError('Camera connected, but the browser blocked autoplay for the preview. Click the preview or re-trigger the connection to start playback.');
+        setCameraStatusNote(`Preview connected for ${selectedCameraSource.name}; autoplay blocked: ${detail}`);
+      }
+    };
+
     if (cameraInputMode === 'NETWORK' && selectedCameraSource.streamUrl) {
       try {
         if (previewVideoRef.current) {
-          previewVideoRef.current.src = selectedCameraSource.streamUrl;
-          previewVideoRef.current.muted = true;
-          previewVideoRef.current.load();
-          await previewVideoRef.current.play().catch((error) => {
-            const detail = error instanceof Error ? error.message : 'unknown autoplay block';
-            setCameraError(`Network stream loaded but playback was blocked: ${detail}`);
-            setCameraStatusNote(`Preview waiting on browser playback permission for ${selectedCameraSource.name}.`);
-          });
+          await attachAndPlayPreview(previewVideoRef.current, selectedCameraSource.streamUrl);
         }
         setCameraError(null);
       } catch (error) {
@@ -572,14 +600,8 @@ export default function Tournament() {
       });
       activeCameraStreamRef.current = stream;
       setActivePreviewStream(stream);
-      setCameraError(null);
       if (previewVideoRef.current) {
-        previewVideoRef.current.srcObject = stream;
-        previewVideoRef.current.muted = true;
-        await previewVideoRef.current.play().catch((error) => {
-          const detail = error instanceof Error ? error.message : 'unknown autoplay block';
-          setCameraStatusNote(`Preview stream attached, but autoplay was blocked: ${detail}`);
-        });
+        await attachAndPlayPreview(previewVideoRef.current, stream);
       }
       setCameraStatusNote(`Preview ready for ${selectedCameraSource.name}.`);
     } catch (error) {
@@ -638,8 +660,6 @@ export default function Tournament() {
     })
     .filter((camera): camera is { id: string; name: string; type: 'WIFI' | 'USB' | 'OBS' | 'NETWORK' } => Boolean(camera));
 
-  const previewTableNumber = activeCameraTable ?? 1;
-
   const completedMatches = matches
     .filter((match) => match.state === 'COMPLETE' && typeof match.round === 'number')
     .sort((a, b) => b.round - a.round);
@@ -660,10 +680,6 @@ export default function Tournament() {
       .map((player) => player.id)
       .filter((playerId) => playerId !== championId && playerId !== runnerUpId)
   ];
-  const leaderboardOverlayNames = useMemo(
-    () => orderedLeaderboard.slice(0, 4).map((playerId) => players.find((player) => player.id === playerId)?.displayName ?? 'TBD'),
-    [orderedLeaderboard, players]
-  );
   const raceOverlayPlayers = useMemo(() => {
     const playerA = players[0]?.displayName ?? 'Red Team';
     const playerB = players[1]?.displayName ?? 'Blue Team';
@@ -1343,10 +1359,16 @@ export default function Tournament() {
 
     setIsCameraConnecting(true);
     setCameraError(null);
+    setCameraStatusNote('Preparing camera connection…');
     try {
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Camera APIs are not available in this browser.');
+      }
+
       await stopPairingSession();
       setCameraPairCode('');
       stopActiveCameraStream();
+
       if (cameraInputMode === 'NETWORK') {
         const networkSource: BroadcastCameraSource = {
           id: selectedCameraSource.id,
@@ -1364,10 +1386,13 @@ export default function Tournament() {
         }));
         if (previewVideoRef.current) {
           previewVideoRef.current.src = selectedCameraSource.streamUrl ?? '';
+          previewVideoRef.current.muted = true;
+          previewVideoRef.current.playsInline = true;
+          previewVideoRef.current.load();
           try {
             await previewVideoRef.current.play();
           } catch {
-            // browser playback depends on codec/container support from the network source
+            setCameraStatusNote('Network source loaded, but browser autoplay was blocked.');
           }
         }
       } else {
@@ -1385,10 +1410,12 @@ export default function Tournament() {
         setActivePreviewStream(stream);
         if (previewVideoRef.current) {
           previewVideoRef.current.srcObject = stream;
+          previewVideoRef.current.muted = true;
+          previewVideoRef.current.playsInline = true;
           try {
             await previewVideoRef.current.play();
           } catch {
-            // autoplay can be blocked; browser controls remain available for manual playback
+            setCameraStatusNote('Camera connected, but browser autoplay was blocked.');
           }
         }
       }
