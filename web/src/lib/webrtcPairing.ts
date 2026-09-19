@@ -106,7 +106,12 @@ export async function createPairSignalClient(
           await channel.send({
             type: 'broadcast',
             event: 'signal',
-            payload: message
+            payload: {
+              version: 1,
+              pairCode: signalSessionKey.replace(/^webrtc-pair-/, ''),
+              sessionId: message.sessionId ?? null,
+              message
+            }
           });
         },
         close: () => {
@@ -122,15 +127,21 @@ export async function createPairSignalClient(
 
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         const fallback = new BroadcastChannel(signalSessionKey);
-        fallback.onmessage = (event: MessageEvent<PairSignalMessage>) => {
-          if (!event?.data || typeof event.data.type !== 'string') return;
-          onMessage(event.data);
+        fallback.onmessage = (event: MessageEvent<{ message?: PairSignalMessage; type?: string }>) => {
+          const payload = event?.data?.message ?? event?.data;
+          if (!payload || typeof payload.type !== 'string') return;
+          onMessage(payload as PairSignalMessage);
         };
 
         return {
           transport: 'broadcast-channel',
           send: async (message) => {
-            fallback.postMessage(message);
+            fallback.postMessage({
+              version: 1,
+              pairCode: signalSessionKey.replace(/^webrtc-pair-/, ''),
+              sessionId: message.sessionId ?? null,
+              message
+            });
           },
           close: () => {
             fallback.close();
@@ -147,15 +158,21 @@ export async function createPairSignalClient(
   }
 
   const fallback = new BroadcastChannel(signalSessionKey);
-  fallback.onmessage = (event: MessageEvent<PairSignalMessage>) => {
-    if (!event?.data || typeof event.data.type !== 'string') return;
-    onMessage(event.data);
+  fallback.onmessage = (event: MessageEvent<{ message?: PairSignalMessage; type?: string }>) => {
+    const payload = event?.data?.message ?? event?.data;
+    if (!payload || typeof payload.type !== 'string') return;
+    onMessage(payload as PairSignalMessage);
   };
 
   return {
     transport: 'broadcast-channel',
     send: async (message) => {
-      fallback.postMessage(message);
+      fallback.postMessage({
+        version: 1,
+        pairCode: signalSessionKey.replace(/^webrtc-pair-/, ''),
+        sessionId: message.sessionId ?? null,
+        message
+      });
     },
     close: () => {
       fallback.close();
