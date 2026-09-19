@@ -11,6 +11,7 @@ import {
   getBroadcastRuntimeConfig,
   subscribeToBroadcastPublications
 } from '@/lib/broadcast';
+import { createViewerChannelRelay, type ViewerChannelRelay } from '@/lib/liveRelay';
 import { useTournamentStore } from '@/store/tournamentStore';
 import './BroadcastView.css';
 
@@ -41,6 +42,7 @@ export default function BroadcastView() {
   const channelName = channel?.name ?? 'Featured Table';
   const playerRef = useRef<HTMLDivElement | null>(null);
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
+  const relayRef = useRef<ViewerChannelRelay | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isVideoReady, setIsVideoReady] = useState(false);
   const [status, setStatus] = useState<BroadcastStatus>(channel?.status ?? 'LIVE');
@@ -48,10 +50,12 @@ export default function BroadcastView() {
   const [runtimeConfig] = useState<BroadcastRuntimeConfig>(() => getBroadcastRuntimeConfig());
   const activePublication = getBroadcastPublicationByChannelId(channel?.id);
   const publishedStream = getPublishedBroadcastLiveStream(channel?.id);
+  const [relayStream, setRelayStream] = useState<MediaStream | null>(null);
+  const effectiveStream = publishedStream ?? relayStream;
   const liveStreamUrl = activePublication?.streamUrl ?? '';
   const streamHasLiveVideoTrack = useMemo(
-    () => Boolean(publishedStream?.getVideoTracks().some((track) => track.readyState === 'live')),
-    [publishedStream]
+    () => Boolean(effectiveStream?.getVideoTracks().some((track) => track.readyState === 'live')),
+    [effectiveStream]
   );
   const shouldAttemptLiveVideo = streamHasLiveVideoTrack || liveStreamUrl.trim().length > 0;
 
@@ -70,6 +74,59 @@ export default function BroadcastView() {
     return subscribeToBroadcastPublications(() => {
       setPublicationVersion((value) => value + 1);
     });
+  }, []);
+
+  useEffect(() => {
+    const channelKey = channel?.id ?? '';
+    if (!channelKey) {
+      if (relayRef.current) {
+        void relayRef.current.stop();
+        relayRef.current = null;
+      }
+      setRelayStream(null);
+      return;
+    }
+
+    let cancelled = false;
+    setRelayStream(null);
+    if (relayRef.current?.channelId === channelKey) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        if (relayRef.current) {
+          await relayRef.current.stop();
+          relayRef.current = null;
+        }
+        const relay = await createViewerChannelRelay(channelKey, (stream) => {
+          if (!cancelled) {
+            setRelayStream(stream);
+          }
+        });
+        if (cancelled) {
+          await relay.stop();
+          return;
+        }
+        relayRef.current = relay;
+      } catch {
+        // relay is best effort; metadata-only fallback remains visible
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [channel?.id]);
+
+  useEffect(() => {
+    return () => {
+      const relay = relayRef.current;
+      relayRef.current = null;
+      if (relay) {
+        void relay.stop();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -105,10 +162,10 @@ export default function BroadcastView() {
     }
     video.muted = true;
     video.playsInline = true;
-    if (publishedStream) {
-      if (video.srcObject !== publishedStream) {
+    if (effectiveStream) {
+      if (video.srcObject !== effectiveStream) {
         video.removeAttribute('src');
-        video.srcObject = publishedStream;
+        video.srcObject = effectiveStream;
       }
       void video.play().catch(() => setIsVideoReady(false));
       return;
@@ -119,7 +176,7 @@ export default function BroadcastView() {
       video.load();
     }
     void video.play().catch(() => setIsVideoReady(false));
-  }, [liveStreamUrl, publishedStream, shouldAttemptLiveVideo]);
+  }, [effectiveStream, liveStreamUrl, shouldAttemptLiveVideo]);
 
   const toggleFullscreen = async () => {
     const doc = document as FullscreenDoc;

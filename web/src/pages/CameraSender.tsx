@@ -11,6 +11,18 @@ import {
 import { isSupabaseConfigured } from '@/lib/supabase';
 import './CameraSender.css';
 
+type FullscreenDoc = Document & {
+  webkitFullscreenElement?: Element;
+  msFullscreenElement?: Element;
+  webkitExitFullscreen?: () => Promise<void> | void;
+  msExitFullscreen?: () => Promise<void> | void;
+};
+
+type FullscreenElement = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void;
+  msRequestFullscreen?: () => Promise<void> | void;
+};
+
 export default function CameraSender() {
   const { pairCode = '' } = useParams<{ pairCode: string }>();
   const normalizedPairCode = useMemo(() => pairCode.trim().toUpperCase(), [pairCode]);
@@ -27,6 +39,7 @@ export default function CameraSender() {
   const streamRef = useRef<MediaStream | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const signalClientRef = useRef<PairSignalClient | null>(null);
+  const previewShellRef = useRef<HTMLDivElement | null>(null);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const manualStopRef = useRef(false);
   const hasActivatedSessionRef = useRef(false);
@@ -36,6 +49,23 @@ export default function CameraSender() {
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const stopSessionRef = useRef<(notifyHost?: boolean) => Promise<void>>(async () => undefined);
   const connectCameraRef = useRef<(mode?: 'manual' | 'auto') => Promise<void>>(async () => undefined);
+  const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
+
+  const notifyNativeStatus = (nextStatus: string) => {
+    const bridge = (window as Window & {
+      AndroidSender?: { onStatusChanged?: (status: string) => void };
+    }).AndroidSender;
+    if (!bridge?.onStatusChanged) return;
+    bridge.onStatusChanged(nextStatus);
+  };
+
+  const notifyNativeConnection = (connected: boolean) => {
+    const bridge = (window as Window & {
+      AndroidSender?: { onConnectionStateChanged?: (connected: string) => void };
+    }).AndroidSender;
+    if (!bridge?.onConnectionStateChanged) return;
+    bridge.onConnectionStateChanged(connected ? 'connected' : 'disconnected');
+  };
 
   const clearReconnectTimer = () => {
     if (reconnectTimerRef.current !== null) {
@@ -130,8 +160,33 @@ export default function CameraSender() {
   }, [isConnected]);
 
   useEffect(() => {
+    notifyNativeStatus(status);
+  }, [status]);
+
+  useEffect(() => {
+    notifyNativeConnection(isConnected);
+  }, [isConnected]);
+
+  useEffect(() => {
     return () => {
       void stopSessionRef.current();
+    };
+  }, []);
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      const doc = document as FullscreenDoc;
+      const fullscreenElement = doc.fullscreenElement ?? doc.webkitFullscreenElement ?? doc.msFullscreenElement ?? null;
+      setIsPreviewFullscreen(fullscreenElement === previewShellRef.current);
+    };
+
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    document.addEventListener('webkitfullscreenchange', syncFullscreenState as EventListener);
+    document.addEventListener('MSFullscreenChange', syncFullscreenState as EventListener);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreenState);
+      document.removeEventListener('webkitfullscreenchange', syncFullscreenState as EventListener);
+      document.removeEventListener('MSFullscreenChange', syncFullscreenState as EventListener);
     };
   }, []);
 
@@ -329,6 +384,39 @@ export default function CameraSender() {
     };
   }, [normalizedPairCode, pairDiagnostics]);
 
+  const togglePreviewFullscreen = async () => {
+    const doc = document as FullscreenDoc;
+    const previewShell = previewShellRef.current as FullscreenElement | null;
+    if (!previewShell) return;
+    const fullscreenElement = doc.fullscreenElement ?? doc.webkitFullscreenElement ?? doc.msFullscreenElement ?? null;
+    if (fullscreenElement === previewShell) {
+      if (doc.exitFullscreen) {
+        await doc.exitFullscreen();
+        return;
+      }
+      if (doc.webkitExitFullscreen) {
+        await doc.webkitExitFullscreen();
+        return;
+      }
+      if (doc.msExitFullscreen) {
+        await doc.msExitFullscreen();
+      }
+      return;
+    }
+
+    if (previewShell.requestFullscreen) {
+      await previewShell.requestFullscreen();
+      return;
+    }
+    if (previewShell.webkitRequestFullscreen) {
+      await previewShell.webkitRequestFullscreen();
+      return;
+    }
+    if (previewShell.msRequestFullscreen) {
+      await previewShell.msRequestFullscreen();
+    }
+  };
+
   return (
     <section className="camera-sender-page">
       <header className="camera-sender-header">
@@ -397,7 +485,39 @@ export default function CameraSender() {
         </p>
       ) : null}
 
-      <video ref={previewRef} className="camera-sender-preview" autoPlay muted playsInline controls />
+      <section className="camera-preview-card">
+        <div className="camera-preview-head">
+          <strong>Camera + overlay preview</strong>
+          <button type="button" className="btn-secondary camera-preview-fullscreen" onClick={togglePreviewFullscreen}>
+            {isPreviewFullscreen ? 'Exit Full Screen' : 'Full Screen Preview'}
+          </button>
+        </div>
+        <div className="camera-preview-stage" ref={previewShellRef}>
+          <video ref={previewRef} className="camera-sender-preview" autoPlay muted playsInline controls />
+          <div className="camera-preview-overlay">
+            <div className="camera-preview-overlay-top">
+              <span className={`preview-live-pill ${isConnected ? 'active' : ''}`}>
+                {isConnected ? 'LIVE LINKED' : 'FRAMING'}
+              </span>
+              <span>TDTV remote camera preview</span>
+            </div>
+            <div className="camera-preview-overlay-lower-third">
+              <div className="overlay-player overlay-player--red">
+                <span>Red</span>
+                <strong>Player A</strong>
+              </div>
+              <span className="overlay-vs">VS</span>
+              <div className="overlay-player overlay-player--blue">
+                <span>Blue</span>
+                <strong>Player B</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p className="camera-preview-note">
+          Frame this view so player names and race overlays stay readable before the TD goes live.
+        </p>
+      </section>
     </section>
   );
 }

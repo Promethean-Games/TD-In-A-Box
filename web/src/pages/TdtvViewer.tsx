@@ -9,6 +9,7 @@ import {
   getTdtvLobbySlides,
   TDTV_LOOP_CHANNEL_ID
 } from '@/lib/broadcast';
+import { createViewerChannelRelay, type ViewerChannelRelay } from '@/lib/liveRelay';
 import { useTournamentStore } from '@/store/tournamentStore';
 import './TdtvViewer.css';
 
@@ -36,8 +37,10 @@ export default function TdtvViewer() {
   const [lobbySlideIndex, setLobbySlideIndex] = useState(0);
   const playerRef = useRef<HTMLDivElement | null>(null);
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
+  const relayRef = useRef<ViewerChannelRelay | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isVideoReady, setIsVideoReady] = useState(false);
+  const [relayStream, setRelayStream] = useState<MediaStream | null>(null);
 
   const filteredChannels = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -66,10 +69,11 @@ export default function TdtvViewer() {
   const activeLobbySlide = lobbySlides[lobbySlideIndex % Math.max(1, lobbySlides.length)] ?? null;
   const activePublication = getBroadcastPublicationByChannelId(activeChannel.id);
   const publishedStream = getPublishedBroadcastLiveStream(activeChannel.id);
+  const effectiveStream = publishedStream ?? relayStream;
   const liveStreamUrl = isLobbyChannel ? '' : (activePublication?.streamUrl ?? '');
   const streamHasLiveVideoTrack = useMemo(
-    () => Boolean(publishedStream?.getVideoTracks().some((track) => track.readyState === 'live')),
-    [publishedStream]
+    () => Boolean(effectiveStream?.getVideoTracks().some((track) => track.readyState === 'live')),
+    [effectiveStream]
   );
   const shouldAttemptLiveVideo = !isLobbyChannel && (streamHasLiveVideoTrack || liveStreamUrl.trim().length > 0);
 
@@ -77,6 +81,59 @@ export default function TdtvViewer() {
     return subscribeToBroadcastPublications(() => {
       setPublicationVersion((value) => value + 1);
     });
+  }, []);
+
+  useEffect(() => {
+    const channelKey = activeChannel.id;
+    if (!channelKey || isLobbyChannel) {
+      if (relayRef.current) {
+        void relayRef.current.stop();
+        relayRef.current = null;
+      }
+      setRelayStream(null);
+      return;
+    }
+
+    let cancelled = false;
+    setRelayStream(null);
+    if (relayRef.current?.channelId === channelKey) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        if (relayRef.current) {
+          await relayRef.current.stop();
+          relayRef.current = null;
+        }
+        const relay = await createViewerChannelRelay(channelKey, (stream) => {
+          if (!cancelled) {
+            setRelayStream(stream);
+          }
+        });
+        if (cancelled) {
+          await relay.stop();
+          return;
+        }
+        relayRef.current = relay;
+      } catch {
+        // relay is best effort; metadata-only fallback remains visible
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChannel.id, isLobbyChannel]);
+
+  useEffect(() => {
+    return () => {
+      const relay = relayRef.current;
+      relayRef.current = null;
+      if (relay) {
+        void relay.stop();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -110,10 +167,10 @@ export default function TdtvViewer() {
     }
     video.muted = true;
     video.playsInline = true;
-    if (publishedStream) {
-      if (video.srcObject !== publishedStream) {
+    if (effectiveStream) {
+      if (video.srcObject !== effectiveStream) {
         video.removeAttribute('src');
-        video.srcObject = publishedStream;
+        video.srcObject = effectiveStream;
       }
       void video.play().catch(() => setIsVideoReady(false));
       return;
@@ -124,7 +181,7 @@ export default function TdtvViewer() {
       video.load();
     }
     void video.play().catch(() => setIsVideoReady(false));
-  }, [isLobbyChannel, liveStreamUrl, publishedStream, shouldAttemptLiveVideo]);
+  }, [effectiveStream, isLobbyChannel, liveStreamUrl, shouldAttemptLiveVideo]);
 
   useEffect(() => {
     const syncFullscreenState = () => {

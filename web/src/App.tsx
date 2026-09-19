@@ -50,7 +50,7 @@ function App() {
 
 function AppLayout() {
   const location = useLocation();
-  const isViewerOnly = location.pathname.startsWith('/tdtv');
+  const isViewerOnly = location.pathname.startsWith('/tdtv') || location.pathname.startsWith('/camera-link');
   const runtimeStatus = getRuntimeStatus();
 
   return (

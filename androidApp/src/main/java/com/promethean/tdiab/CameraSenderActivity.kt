@@ -1,7 +1,9 @@
 package com.promethean.tdiab
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -15,7 +17,9 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.JavascriptInterface
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +33,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -49,11 +54,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import android.graphics.Color as AndroidColor
 
 class CameraSenderActivity : ComponentActivity() {
     private val prefsName = "tdiab_sender_prefs"
     private val pairCodeKey = "last_pair_code"
     private var senderWebView: WebView? = null
+    private var pendingSenderUrl: String? = null
+    private var pendingPermissionUrl: String? = null
+    private var bridgeStatusUpdater: ((String) -> Unit)? = null
+    private var bridgeConnectionUpdater: ((Boolean) -> Unit)? = null
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            val target = pendingPermissionUrl
+            if (!target.isNullOrBlank()) {
+                pendingSenderUrl = target
+                senderWebView?.loadUrl(target)
+            }
+        }
+        pendingPermissionUrl = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,6 +109,15 @@ class CameraSenderActivity : ComponentActivity() {
                     return@SenderScreen
                 }
                 val senderUrl = "https://promethean-games.github.io/TD-In-A-Box/#/camera-link/$normalizedCode"
+                pendingSenderUrl = senderUrl
+                val hasCameraPermission =
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                if (!hasCameraPermission) {
+                    statusUpdater("Requesting camera permission…")
+                    pendingPermissionUrl = senderUrl
+                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    return@SenderScreen
+                }
                 statusUpdater("Opening sender link…")
                 senderWebView?.loadUrl(senderUrl)
             }
@@ -105,6 +137,8 @@ class CameraSenderActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        bridgeStatusUpdater = null
+        bridgeConnectionUpdater = null
         senderWebView?.apply {
             stopLoading()
             loadUrl("about:blank")
@@ -127,6 +161,26 @@ class CameraSenderActivity : ComponentActivity() {
         }
     }
 
+    private inner class SenderBridge {
+        @JavascriptInterface
+        fun onStatusChanged(nextStatus: String?) {
+            runOnUiThread {
+                if (!nextStatus.isNullOrBlank()) {
+                    bridgeStatusUpdater?.invoke(nextStatus)
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun onConnectionStateChanged(state: String?) {
+            runOnUiThread {
+                val normalized = state?.trim()?.lowercase()
+                val isConnected = normalized == "connected"
+                bridgeConnectionUpdater?.invoke(isConnected)
+            }
+        }
+    }
+
     @Composable
     private fun SenderScreen(
         initialPairCode: String,
@@ -137,6 +191,15 @@ class CameraSenderActivity : ComponentActivity() {
     ) {
         var pairCode by remember { mutableStateOf(initialPairCode) }
         var statusText by remember { mutableStateOf("Idle") }
+        var showSenderWebView by remember { mutableStateOf(false) }
+        var hasVerifiedConnection by remember { mutableStateOf(false) }
+        bridgeStatusUpdater = { next -> statusText = next }
+        bridgeConnectionUpdater = { connected ->
+            hasVerifiedConnection = connected
+            if (connected) {
+                statusText = "Verified connection established."
+            }
+        }
 
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
@@ -152,6 +215,7 @@ class CameraSenderActivity : ComponentActivity() {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
+                            .verticalScroll(androidx.compose.foundation.rememberScrollState())
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
@@ -160,43 +224,51 @@ class CameraSenderActivity : ComponentActivity() {
                             color = Color.White,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            "Use the pair code from the Tournament Broadcast tab, then tap Connect.",
-                            color = Color(0xFFB7C0CD)
-                        )
+                        if (!hasVerifiedConnection) {
+                            Text(
+                                "Use the pair code from the Tournament Broadcast tab, then tap Connect.",
+                                color = Color(0xFFB7C0CD)
+                            )
 
-                        OutlinedTextField(
-                            value = pairCode,
-                            onValueChange = {
-                                val sanitized = it.uppercase().filter { ch -> ch.isLetterOrDigit() }.take(8)
-                                pairCode = sanitized
-                                onPairCodePersist(sanitized)
-                            },
-                            label = { Text("Pair code") },
-                            modifier = Modifier.fillMaxWidth(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-                            colors = senderFieldColors()
-                        )
+                            OutlinedTextField(
+                                value = pairCode,
+                                onValueChange = {
+                                    val sanitized = it.uppercase().filter { ch -> ch.isLetterOrDigit() }.take(8)
+                                    pairCode = sanitized
+                                    onPairCodePersist(sanitized)
+                                },
+                                label = { Text("Pair code") },
+                                modifier = Modifier.fillMaxWidth(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                                colors = senderFieldColors()
+                            )
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Button(
-                                onClick = {
-                                    onPairCodePersist(pairCode)
-                                    onConnect(pairCode) { statusText = it }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDF1E2D))
-                            ) {
-                                Text("Connect")
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Button(
+                                    onClick = {
+                                        onPairCodePersist(pairCode)
+                                        showSenderWebView = true
+                                        onConnect(pairCode) { statusText = it }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDF1E2D))
+                                ) {
+                                    Text("Connect")
+                                }
+                                Button(
+                                    onClick = {
+                                        senderWebView?.reload()
+                                        statusText = "Reloading sender page…"
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F6ECF))
+                                ) {
+                                    Text("Reload")
+                                }
                             }
-                            Button(
-                                onClick = {
-                                    senderWebView?.reload()
-                                    statusText = "Reloading sender page…"
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F6ECF))
-                            ) {
-                                Text("Reload")
-                            }
+                        } else {
+                            Text(
+                                "Connection verified. Pair code controls are hidden while the camera is live.",
+                                color = Color(0xFFB7C0CD)
+                            )
                         }
 
                         if (!batteryOptimizationsIgnored && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -221,20 +293,45 @@ class CameraSenderActivity : ComponentActivity() {
                             color = Color(0xFF8F9BAB)
                         )
 
-                        AndroidView(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(520.dp),
-                            factory = { context ->
-                                WebView(context).apply {
-                                    configureSenderWebView(
-                                        onStatus = { statusText = it }
-                                    )
-                                    senderWebView = this
+                        if (!showSenderWebView) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(520.dp)
+                                    .background(Color(0xFF0B0F15)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Enter pair code and tap Connect to open camera sender.",
+                                    color = Color(0xFF9CAAC0)
+                                )
+                            }
+                        } else {
+                            AndroidView(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(520.dp),
+                                factory = { context ->
+                                    WebView(context).apply {
+                                        configureSenderWebView(
+                                            onStatus = { statusText = it }
+                                        )
+                                        senderWebView = this
+                                        pendingSenderUrl?.let { target ->
+                                            loadUrl(target)
+                                        }
+                                    }
+                                },
+                                update = {
+                                    senderWebView = it
+                                    pendingSenderUrl?.let { target ->
+                                        if (it.url != target) {
+                                            it.loadUrl(target)
+                                        }
+                                    }
                                 }
-                            },
-                            update = { senderWebView = it }
-                        )
+                            )
+                        }
                     }
                 }
             }
@@ -242,6 +339,8 @@ class CameraSenderActivity : ComponentActivity() {
     }
 
     private fun WebView.configureSenderWebView(onStatus: (String) -> Unit) {
+        setBackgroundColor(AndroidColor.BLACK)
+        addJavascriptInterface(SenderBridge(), "AndroidSender")
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
@@ -267,6 +366,11 @@ class CameraSenderActivity : ComponentActivity() {
         }
 
         webViewClient = object : WebViewClient() {
+            override fun onPageCommitVisible(view: WebView?, url: String?) {
+                onStatus("Sender page visible.")
+                super.onPageCommitVisible(view, url)
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 onStatus("Sender page loaded.")
                 super.onPageFinished(view, url)

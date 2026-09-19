@@ -66,6 +66,7 @@ import {
   type PairSignalClient,
   type PairSignalMessage
 } from '@/lib/webrtcPairing';
+import { createHostChannelRelay, type HostChannelRelay } from '@/lib/liveRelay';
 import { getAppRouteUrl } from '@/lib/appPaths';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getPairingAvailabilityError } from '@/lib/webrtcPairing';
@@ -196,6 +197,7 @@ export default function Tournament() {
   const activeCameraStreamRef = useRef<MediaStream | null>(null);
   const pairSignalClientRef = useRef<PairSignalClient | null>(null);
   const pairPeerRef = useRef<RTCPeerConnection | null>(null);
+  const liveRelayRef = useRef<HostChannelRelay | null>(null);
   const pendingIncomingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const matchCarouselTrackRef = useRef<HTMLDivElement | null>(null);
   const matchCarouselCardRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -525,6 +527,11 @@ export default function Tournament() {
 
   useEffect(() => {
     return () => {
+      const liveRelay = liveRelayRef.current;
+      liveRelayRef.current = null;
+      if (liveRelay) {
+        void liveRelay.stop();
+      }
       void stopPairingSession(false);
       const stream = activeCameraStreamRef.current;
       if (!stream) return;
@@ -659,6 +666,54 @@ export default function Tournament() {
       clearPublishedBroadcastLiveStream(publication.channelId);
     }
   }, [activePreviewStream, broadcastConfig.streamStatus, buildBroadcastPublication, currentTournament?.id]);
+
+  useEffect(() => {
+    const activeChannelId = selectedBroadcastChannel?.id ?? '';
+    const shouldRelayLiveFeed =
+      broadcastConfig.streamStatus === 'LIVE' &&
+      activeChannelId.length > 0 &&
+      Boolean(activePreviewStream);
+
+    if (!shouldRelayLiveFeed || !activePreviewStream) {
+      if (liveRelayRef.current) {
+        void liveRelayRef.current.stop();
+        liveRelayRef.current = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+
+    if (liveRelayRef.current?.channelId === activeChannelId) {
+      liveRelayRef.current.updateStream(activePreviewStream);
+      return;
+    }
+
+    void (async () => {
+      try {
+        if (liveRelayRef.current) {
+          await liveRelayRef.current.stop();
+          liveRelayRef.current = null;
+        }
+        const relay = await createHostChannelRelay(activeChannelId, activePreviewStream, (message) => {
+          setCameraError(message);
+        });
+        if (cancelled) {
+          await relay.stop();
+          return;
+        }
+        liveRelayRef.current = relay;
+      } catch (error) {
+        if (!cancelled) {
+          setCameraError(error instanceof Error ? error.message : 'Unable to relay live stream to TDTV viewers.');
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePreviewStream, broadcastConfig.streamStatus, selectedBroadcastChannel?.id]);
 
   const previewSelectedSource = useCallback(async () => {
     if (cameraInputMode === 'QR' || !selectedCameraSource) return;
