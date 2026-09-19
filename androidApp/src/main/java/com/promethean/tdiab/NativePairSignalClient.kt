@@ -133,6 +133,22 @@ class NativePairSignalClient(
 
     private fun nextRef(): String = refCounter.getAndIncrement().toString()
 
+    private fun extractSignalPayload(element: JsonElement?): JsonElement? {
+        if (element == null) return null
+        val root = element as? JsonObject ?: return element
+        val payloadField = root["payload"]
+        if (payloadField != null) {
+            val nested = payloadField as? JsonObject ?: return payloadField
+            val eventName = nested["event"]?.jsonPrimitive?.content
+            val typeName = nested["type"]?.jsonPrimitive?.content
+            if (eventName == "signal" || typeName == "broadcast") {
+                return nested["payload"] ?: nested
+            }
+            return payloadField
+        }
+        return root
+    }
+
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
@@ -202,15 +218,13 @@ class NativePairSignalClient(
             }
 
             if (frame.event == "broadcast") {
-                val extracted = frame.payload["payload"]
-                val candidate = when {
-                    extracted is JsonObject && extracted["event"]?.jsonPrimitive?.content == "signal" -> extracted["payload"]
-                    extracted is JsonObject && extracted["type"]?.jsonPrimitive?.content == "broadcast" && extracted["event"]?.jsonPrimitive?.content == "signal" -> extracted["payload"]
-                    else -> extracted
+                val normalizedPayload = extractSignalPayload(frame.payload)
+                if (normalizedPayload == null) {
+                    return
                 }
-                val payloadElement = candidate ?: return
+
                 val message = try {
-                    json.decodeFromJsonElement(PairSignalMessagePayload.serializer(), payloadElement)
+                    json.decodeFromJsonElement(PairSignalMessagePayload.serializer(), normalizedPayload)
                 } catch (_: Throwable) {
                     return
                 }
