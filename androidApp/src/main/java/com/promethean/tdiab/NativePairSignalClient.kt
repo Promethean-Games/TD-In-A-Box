@@ -139,54 +139,61 @@ class NativePairSignalClient(
     private fun extractSignalPayload(element: JsonElement?): JsonElement? {
         if (element == null) return null
 
-        var current = element
-        var iterations = 0
-        while (iterations < 8) {
-            val root = current as? JsonObject ?: return current
-
-            val eventName = root["event"]?.jsonPrimitive?.content
-            val typeName = root["type"]?.jsonPrimitive?.content
-            val fromName = root["from"]?.jsonPrimitive?.content
-            val messageValue = root["message"]
-            val payloadValue = root["payload"]
-
-            if (typeName in setOf("ready", "offer", "answer", "ice", "stop", "error") || !fromName.isNullOrBlank()) {
-                return root
+        val candidates = mutableListOf<JsonElement>()
+        fun addIfPresent(candidate: JsonElement?) {
+            if (candidate != null && candidate !is kotlinx.serialization.json.JsonNull) {
+                candidates += candidate
             }
-            if (messageValue != null && messageValue !is kotlinx.serialization.json.JsonNull) {
-                val nestedMessage = messageValue as? JsonObject ?: return messageValue
-                val nestedType = nestedMessage["type"]?.jsonPrimitive?.content
-                val nestedFrom = nestedMessage["from"]?.jsonPrimitive?.content
-                if (nestedType in setOf("ready", "offer", "answer", "ice", "stop", "error") || !nestedFrom.isNullOrBlank()) {
-                    return nestedMessage
-                }
-            }
-            if (eventName == "signal" || typeName == "broadcast") {
-                current = payloadValue ?: messageValue ?: root
-            } else if (payloadValue != null && payloadValue !is kotlinx.serialization.json.JsonNull) {
-                val nestedObject = payloadValue as? JsonObject ?: return payloadValue
-                val nestedType = nestedObject["type"]?.jsonPrimitive?.content
-                val nestedFrom = nestedObject["from"]?.jsonPrimitive?.content
-                if (nestedType in setOf("ready", "offer", "answer", "ice", "stop", "error") || !nestedFrom.isNullOrBlank()) {
-                    return nestedObject
-                }
-                current = payloadValue
-            } else if (messageValue != null && messageValue !is kotlinx.serialization.json.JsonNull) {
-                val nestedObject = messageValue as? JsonObject ?: return messageValue
-                val nestedType = nestedObject["type"]?.jsonPrimitive?.content
-                val nestedFrom = nestedObject["from"]?.jsonPrimitive?.content
-                if (nestedType in setOf("ready", "offer", "answer", "ice", "stop", "error") || !nestedFrom.isNullOrBlank()) {
-                    return nestedObject
-                }
-                current = messageValue
-            } else {
-                return root
-            }
-
-            iterations += 1
         }
 
-        return current
+        val root = element as? JsonObject ?: return element
+        addIfPresent(root)
+        addIfPresent(root["message"])
+        addIfPresent(root["payload"])
+        addIfPresent((root["payload"] as? JsonObject)?.get("message"))
+        addIfPresent((root["payload"] as? JsonObject)?.get("payload"))
+        addIfPresent((root["message"] as? JsonObject)?.get("payload"))
+
+        for (candidate in candidates) {
+            val candidateObject = candidate as? JsonObject ?: continue
+            val typeName = candidateObject["type"]?.jsonPrimitive?.content
+            val fromName = candidateObject["from"]?.jsonPrimitive?.content
+            val tsValue = candidateObject["ts"]
+            if (typeName in setOf("ready", "offer", "answer", "ice", "stop", "error") || !fromName.isNullOrBlank()) {
+                if (tsValue != null || candidateObject["payload"] != null) {
+                    return candidate
+                }
+            }
+        }
+
+        return root["message"] ?: root["payload"] ?: root
+    }
+
+    private fun decodeSignalMessage(rawPayload: JsonElement?): PairSignalMessagePayload? {
+        if (rawPayload == null) return null
+        val candidateRoot = rawPayload as? JsonObject ?: return null
+        val shims = listOf(
+            candidateRoot,
+            candidateRoot["message"],
+            candidateRoot["payload"],
+            (candidateRoot["payload"] as? JsonObject)?.get("message"),
+            (candidateRoot["payload"] as? JsonObject)?.get("payload"),
+            (candidateRoot["message"] as? JsonObject)?.get("payload")
+        )
+
+        for (candidate in shims) {
+            val objectCandidate = candidate as? JsonObject ?: continue
+            val typeName = objectCandidate["type"]?.jsonPrimitive?.content
+            val fromName = objectCandidate["from"]?.jsonPrimitive?.content
+            if (typeName in setOf("ready", "offer", "answer", "ice", "stop", "error") || !fromName.isNullOrBlank()) {
+                return try {
+                    json.decodeFromJsonElement(PairSignalMessagePayload.serializer(), objectCandidate)
+                } catch (_: Throwable) {
+                    null
+                }
+            }
+        }
+        return null
     }
 
     private fun logSignalTrace(stage: String, detail: String, severity: String = "INFO") {
@@ -281,12 +288,11 @@ class NativePairSignalClient(
                     return
                 }
 
-                val message = try {
-                    json.decodeFromJsonElement(PairSignalMessagePayload.serializer(), normalizedPayload)
-                } catch (error: Throwable) {
+                val message = decodeSignalMessage(normalizedPayload)
+                if (message == null) {
                     logSignalTrace(
                         "native-signal-decode-failed",
-                        "Realtime broadcast payload decode failed: ${error.message ?: "unknown parse failure"}",
+                        "Realtime broadcast payload decode failed; keys=${normalizedPayload.let { if (it is JsonObject) it.keys.joinToString() else it.toString() }}",
                         "ERROR"
                     )
                     return
