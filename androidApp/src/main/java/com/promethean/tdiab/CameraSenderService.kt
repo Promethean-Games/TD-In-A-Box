@@ -488,6 +488,7 @@ class CameraSenderService : Service() {
         val rtcPeer = peerConnection ?: return
         val currentSignalClient = signalClient ?: return
         var stopRequested = false
+        var answerToSend: PairSignalMessagePayload? = null
 
         sessionMutex.withLock {
             when (message.type) {
@@ -565,20 +566,16 @@ class CameraSenderService : Service() {
                                 pairCode = pairCode
                             )
                         }
-                        withTimeout(6_000) {
-                            currentSignalClient.send(
-                                PairSignalMessagePayload(
-                                    type = "answer",
-                                    from = "sender",
-                                    ts = System.currentTimeMillis(),
-                                    sessionId = activeSessionId ?: message.sessionId,
-                                    payload = buildJsonObject {
-                                        put("type", answer.type.canonicalForm())
-                                        put("sdp", answer.description)
-                                    }
-                                )
-                            )
-                        }
+                        answerToSend = PairSignalMessagePayload(
+                            type = "answer",
+                            from = "sender",
+                            ts = System.currentTimeMillis(),
+                            sessionId = activeSessionId ?: message.sessionId,
+                            payload = buildJsonObject {
+                                put("type", answer.type.canonicalForm())
+                                put("sdp", answer.description)
+                            }
+                        )
                         updateState(
                             pairCode = pairCode,
                             statusText = "Answer sent. Finishing secure connection…",
@@ -632,6 +629,12 @@ class CameraSenderService : Service() {
                     manualDisconnect = true
                     stopRequested = true
                 }
+            }
+        }
+
+        if (answerToSend != null) {
+            withTimeout(6_000) {
+                currentSignalClient.send(answerToSend)
             }
         }
 
@@ -692,6 +695,10 @@ class CameraSenderService : Service() {
         clearPairCode: Boolean = true,
         stopForegroundSession: Boolean = false
     ) {
+        val currentSignalClient: NativePairSignalClient?
+        val stopSessionId: String?
+        val activePeerConnection: PeerConnection?
+
         sessionMutex.withLock {
             readyAnnouncementJob?.cancel()
             readyAnnouncementJob = null
@@ -702,36 +709,18 @@ class CameraSenderService : Service() {
             hasReceivedHostOffer = false
             hasLoggedInboundIce = false
             hasLoggedOutboundIce = false
-            val stopSessionId = activeSessionId
+            stopSessionId = activeSessionId
             activeSessionId = null
             activeHostSessionId = null
             reconnectJob?.cancel()
             reconnectJob = null
 
-            val currentSignalClient = signalClient
+            currentSignalClient = signalClient
             signalClient = null
-            if (notifyStop) {
-                runCatching {
-                    currentSignalClient?.send(
-                        PairSignalMessagePayload(
-                            type = "stop",
-                            from = "sender",
-                            ts = System.currentTimeMillis(),
-                            sessionId = stopSessionId
-                        )
-                    )
-                }
-            }
-            runCatching {
-                currentSignalClient?.close()
-            }
-
             pendingRemoteIce.clear()
-            // PeerConnection owns sender lifecycle; disposing both causes double-dispose crashes.
             videoSender = null
-            val activePeerConnection = peerConnection
+            activePeerConnection = peerConnection
             peerConnection = null
-            runCatching { activePeerConnection?.dispose() }
 
             runCatching { videoCapturer?.stopCapture() }
             runCatching { videoCapturer?.dispose() }
@@ -745,9 +734,9 @@ class CameraSenderService : Service() {
             }
             videoTrack = null
 
-            surfaceTextureHelper?.dispose()
+            runCatching { surfaceTextureHelper?.dispose() }
             surfaceTextureHelper = null
-            videoSource?.dispose()
+            runCatching { videoSource?.dispose() }
             videoSource = null
 
             if (clearPairCode) {
@@ -769,6 +758,21 @@ class CameraSenderService : Service() {
                 updateNotification("Native sender idle")
             }
         }
+
+        if (notifyStop && currentSignalClient != null) {
+            runCatching {
+                currentSignalClient.send(
+                    PairSignalMessagePayload(
+                        type = "stop",
+                        from = "sender",
+                        ts = System.currentTimeMillis(),
+                        sessionId = stopSessionId
+                    )
+                )
+            }
+        }
+        runCatching { currentSignalClient?.close() }
+        runCatching { activePeerConnection?.dispose() }
     }
 
     private fun attachPreviewRenderer(renderer: SurfaceViewRenderer) {
