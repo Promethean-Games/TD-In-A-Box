@@ -140,25 +140,30 @@ class NativePairSignalClient(
         var iterations = 0
         while (iterations < 6) {
             val root = current as? JsonObject ?: return current
+
             val eventName = root["event"]?.jsonPrimitive?.content
             val typeName = root["type"]?.jsonPrimitive?.content
+            val fromName = root["from"]?.jsonPrimitive?.content
             val payloadValue = root["payload"]
 
-            if (eventName == "signal") {
-                current = payloadValue ?: current
-            } else if (typeName == "broadcast") {
-                current = payloadValue ?: current
+            val isActualSignalMessage = typeName in setOf("ready", "offer", "answer", "ice", "stop", "error") || !fromName.isNullOrBlank()
+            if (isActualSignalMessage) {
+                return root
+            }
+
+            if (eventName == "signal" || typeName == "broadcast") {
+                current = payloadValue ?: root
             } else if (payloadValue != null && payloadValue !is kotlinx.serialization.json.JsonNull) {
                 val nestedObject = payloadValue as? JsonObject ?: return current
                 val nestedType = nestedObject["type"]?.jsonPrimitive?.content
                 val nestedFrom = nestedObject["from"]?.jsonPrimitive?.content
-                val hasSignalShape = nestedType in setOf("ready", "offer", "answer", "ice", "stop", "error")
-                if (nestedFrom != null || hasSignalShape || nestedObject["sdp"] != null) {
+                val nestedIsActualSignalMessage = nestedType in setOf("ready", "offer", "answer", "ice", "stop", "error") || !nestedFrom.isNullOrBlank()
+                if (nestedIsActualSignalMessage) {
                     return nestedObject
                 }
                 current = payloadValue
             } else {
-                return current
+                return root
             }
             iterations += 1
         }
