@@ -136,15 +136,18 @@ class NativePairSignalClient(
     private fun extractSignalPayload(element: JsonElement?): JsonElement? {
         if (element == null) return null
         val root = element as? JsonObject ?: return element
-        val payloadField = root["payload"]
-        if (payloadField != null) {
-            val nested = payloadField as? JsonObject ?: return payloadField
-            val eventName = nested["event"]?.jsonPrimitive?.content
-            val typeName = nested["type"]?.jsonPrimitive?.content
-            if (eventName == "signal" || typeName == "broadcast") {
-                return nested["payload"] ?: nested
-            }
-            return payloadField
+
+        val rootEvent = root["event"]?.jsonPrimitive?.content
+        val rootType = root["type"]?.jsonPrimitive?.content
+        if (rootEvent == "signal" || rootType == "broadcast") {
+            return root["payload"] ?: root
+        }
+
+        val payloadField = root["payload"] as? JsonObject ?: return root
+        val payloadEvent = payloadField["event"]?.jsonPrimitive?.content
+        val payloadType = payloadField["type"]?.jsonPrimitive?.content
+        if (payloadEvent == "signal" || payloadType == "broadcast") {
+            return payloadField["payload"] ?: payloadField
         }
         return root
     }
