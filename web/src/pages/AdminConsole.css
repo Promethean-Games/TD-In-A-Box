@@ -1011,6 +1011,139 @@
   color: rgba(255, 255, 255, 0.68);
 }
 
+.admin-application-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-application-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-application-panel__head h3,
+.admin-application-panel__head p {
+  margin: 0;
+}
+
+.admin-application-panel__head p {
+  color: rgba(220, 232, 245, 0.74);
+  font-size: 0.84rem;
+  margin-top: 6px;
+  max-width: 720px;
+  line-height: 1.55;
+}
+
+.admin-application-status {
+  margin: 0;
+  color: #8cf6c2;
+  font-size: 0.8rem;
+}
+
+.admin-application-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-application-report {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 11, 18, 0.84);
+}
+
+.admin-application-report__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-application-report__head strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.admin-application-report__head small {
+  color: rgba(220, 232, 245, 0.74);
+  font-size: 0.72rem;
+}
+
+.admin-application-report__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: rgba(220, 232, 245, 0.78);
+  font-size: 0.74rem;
+}
+
+.admin-application-report p {
+  margin: 0;
+  color: rgba(220, 232, 245, 0.86);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.admin-application-report pre {
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: #dbeafe;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.admin-application-severity {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-bottom: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-application-severity--fatal {
+  background: rgba(255, 91, 106, 0.14);
+  border-color: rgba(255, 91, 106, 0.28);
+  color: #ffb2bb;
+}
+
+.admin-application-severity--error {
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.28);
+  color: #fecaca;
+}
+
+.admin-application-severity--warn,
+.admin-application-severity--warning {
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(251, 191, 36, 0.28);
+  color: #fde68a;
+}
+
+.admin-application-severity--info {
+  background: rgba(91, 211, 255, 0.12);
+  border-color: rgba(91, 211, 255, 0.24);
+  color: #b6ebff;
+}
+
 .admin-empty-state {
   min-height: 280px;
   display: grid;

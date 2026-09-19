@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 interface AdminEntityRecord {
@@ -24,9 +24,10 @@ import {
 } from '@/lib/channel';
 import { useTournamentStore } from '@/store/tournamentStore';
 import { getAuditLogEntries, recordAuditAction } from '@/lib/audit';
+import { listApplicationReports, type ApplicationReport } from '@/lib/applicationReports';
 import './AdminConsole.css';
 
-type AdminSectionId = 'overview' | 'people' | 'venues' | 'tdtv' | 'events' | 'billing' | 'system';
+type AdminSectionId = 'overview' | 'people' | 'venues' | 'tdtv' | 'events' | 'application' | 'billing' | 'system';
 
 const overviewMetrics = [
   {
@@ -116,6 +117,7 @@ const adminSections = [
   { id: 'people', label: 'People' },
   { id: 'tdtv', label: 'TDTV' },
   { id: 'events', label: 'Tournaments' },
+  { id: 'application', label: 'Application' },
   { id: 'billing', label: 'Billing' },
   { id: 'system', label: 'System' }
 ] as const;
@@ -123,6 +125,7 @@ const adminSections = [
 const nestedAdminNavigation = {
   People: ['Users', 'TDs', 'Venues', 'Players'],
   Tournaments: ['All Tournaments', 'My Tournaments', 'Live Now', 'Recent'],
+  Application: ['Reports'],
   TDTV: ['Network', 'Channels', 'Live Broadcasts'],
   Billing: ['Subscriptions', 'Entitlements'],
   System: ['Activity / Audit Log', 'System Health', 'Settings']
@@ -166,6 +169,8 @@ export default function AdminConsole() {
   const [venueChannelRequests, setVenueChannelRequests] = useState(() => getVenueChannelChangeRequests());
   const [systemSponsorDefaults, setSystemSponsorDefaults] = useState<BroadcastSponsorCard[]>(() => getSystemBroadcastSponsorDefaults());
   const [sponsorshipStatus, setSponsorshipStatus] = useState<string>('');
+  const [applicationReports, setApplicationReports] = useState<ApplicationReport[]>([]);
+  const [applicationReportsStatus, setApplicationReportsStatus] = useState<string>('');
   const [search, setSearch] = useState('');
   const [selectedEntity, setSelectedEntity] = useState<AdminEntityRecord | null>(null);
   const [selectedEntityTab, setSelectedEntityTab] = useState<'overview' | 'activity' | 'history' | 'related'>('overview');
@@ -189,6 +194,22 @@ export default function AdminConsole() {
       })),
     [tournaments]
   );
+
+  const refreshApplicationReports = async () => {
+    setApplicationReportsStatus('Loading crash reports…');
+    try {
+      const reports = await listApplicationReports();
+      setApplicationReports(reports);
+      setApplicationReportsStatus(reports.length > 0 ? `Loaded ${reports.length} report${reports.length === 1 ? '' : 's'}.` : 'No crash reports yet.');
+    } catch (error) {
+      setApplicationReports([]);
+      setApplicationReportsStatus(error instanceof Error ? error.message : 'Unable to load crash reports.');
+    }
+  };
+
+  useEffect(() => {
+    void refreshApplicationReports();
+  }, []);
 
   const sectionData = useMemo(() => {
     const baseCards = [
@@ -234,10 +255,19 @@ export default function AdminConsole() {
           { title: 'Channel registry', value: String(allChannels.length), detail: 'Stored channel allocations' },
           { title: 'Audit trail', value: 'Ready', detail: 'Administrative actions can be recorded here' }
         ];
+      case 'application': {
+        const latestReport = applicationReports[0];
+        const fatalCount = applicationReports.filter((report) => report.severity === 'FATAL').length;
+        return [
+          { title: 'Crash reports', value: String(applicationReports.length), detail: 'Stored application reports' },
+          { title: 'Fatal issues', value: String(fatalCount), detail: 'Uncaught exceptions' },
+          { title: 'Latest report', value: latestReport ? latestReport.app_name : 'None', detail: latestReport ? latestReport.summary : 'Waiting for the first crash report' }
+        ];
+      }
       default:
         return [];
     }
-  }, [activeSection, allChannels, currentUser, permissions, systemSponsorDefaults, tournaments]);
+  }, [activeSection, allChannels, applicationReports, currentUser, permissions, systemSponsorDefaults, tournaments]);
 
   const networkEntityDirectory = useMemo(() => {
     const people = [
@@ -481,7 +511,7 @@ export default function AdminConsole() {
               >
                 {section.label}
               </button>
-              {section.id === 'people' || section.id === 'events' || section.id === 'tdtv' || section.id === 'billing' || section.id === 'system' ? (
+              {section.id === 'people' || section.id === 'events' || section.id === 'application' || section.id === 'tdtv' || section.id === 'billing' || section.id === 'system' ? (
                 <div className="admin-subnav">
                   {nestedAdminNavigation[section.label as keyof typeof nestedAdminNavigation].map((item) => (
                     <button
@@ -491,6 +521,10 @@ export default function AdminConsole() {
                       onClick={() => {
                         if (item === 'My Tournaments') {
                           navigate('/tournaments');
+                          return;
+                        }
+                        if (section.id === 'application' && item === 'Reports') {
+                          setActiveSection('application');
                           return;
                         }
                         setActiveSection(section.id);
@@ -828,6 +862,60 @@ export default function AdminConsole() {
                 </div>
               </section>
             </div>
+          ) : activeSection === 'application' ? (
+            <section className="admin-application-panel">
+              <div className="admin-application-panel__head">
+                <div>
+                  <span className="eyebrow">Application</span>
+                  <h3>Reports</h3>
+                  <p>Crash reports captured by the Android app are synchronized here as files are generated and uploaded.</p>
+                </div>
+                <button type="button" className="ghost-btn ghost-btn--compact" onClick={() => void refreshApplicationReports()}>
+                  Refresh
+                </button>
+              </div>
+
+              {applicationReportsStatus ? <p className="admin-application-status">{applicationReportsStatus}</p> : null}
+
+              <div className="admin-panel-grid">
+                {sectionData.map((item) => (
+                  <article key={`${activeSection}-${item.title}`} className="admin-panel-card">
+                    <span className="admin-panel-card__label">{item.title}</span>
+                    <strong>{item.value}</strong>
+                    <small>{item.detail}</small>
+                  </article>
+                ))}
+              </div>
+
+              {applicationReports.length === 0 ? (
+                <div className="admin-empty-state">
+                  <h3>No crash reports yet</h3>
+                  <p>When the Android app captures an uncaught exception, the report will appear here after the next sync.</p>
+                </div>
+              ) : (
+                <div className="admin-application-list">
+                  {applicationReports.map((report) => (
+                    <article key={report.id} className="admin-application-report">
+                      <div className="admin-application-report__head">
+                        <div>
+                          <span className={`admin-application-severity admin-application-severity--${report.severity.toLowerCase()}`}>{report.severity}</span>
+                          <strong>{report.title}</strong>
+                        </div>
+                        <small>{new Date(report.occurred_at).toLocaleString()}</small>
+                      </div>
+                      <div className="admin-application-report__body">
+                        <span>{report.app_name} • {report.version_name} ({report.build_type})</span>
+                        <span>{report.device_manufacturer} {report.device_model}</span>
+                        <span>{report.android_version} • API {report.sdk_int}</span>
+                        <span>{report.file_path}</span>
+                      </div>
+                      <p>{report.summary}</p>
+                      {report.stack_trace ? <pre>{report.stack_trace}</pre> : null}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
           ) : activeSection === 'people' ? (
             <div className="admin-panel-grid">
               {networkEntityDirectory.people.map((item) => (
