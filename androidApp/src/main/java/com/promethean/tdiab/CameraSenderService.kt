@@ -461,24 +461,44 @@ class CameraSenderService : Service() {
 
     private suspend fun handleSignalMessage(message: PairSignalMessagePayload) {
         if (message.from != "host") return
+
+        val pairCode = activePairCode.orEmpty()
         if (message.sessionId != null && activeHostSessionId != null && message.sessionId != activeHostSessionId) {
+            logConnectionReport(
+                stage = "host-session-stale",
+                detail = "Ignoring stale host signal session ${message.sessionId}; active session is ${activeHostSessionId}.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
             return
         }
+        if (message.sessionId != null) {
+            activeHostSessionId = message.sessionId
+        }
+
+        logConnectionReport(
+            stage = "host-signal-received",
+            detail = "Received host signal: type=${message.type}; session=${message.sessionId ?: "none"}; activeHostSession=${activeHostSessionId ?: "none"}; payload=${message.payload != null}",
+            pairCode = pairCode
+        )
+
         val rtcPeer = peerConnection ?: return
         val currentSignalClient = signalClient ?: return
-        val pairCode = activePairCode.orEmpty()
 
         when (message.type) {
             "offer" -> {
-                if (message.sessionId != null) {
-                    activeHostSessionId = message.sessionId
-                }
                 if (rtcPeer.signalingState() != PeerConnection.SignalingState.STABLE || rtcPeer.remoteDescription != null) {
+                    logConnectionReport(
+                        stage = "offer-ignored",
+                        detail = "Host offer ignored because peer state was not stable (${rtcPeer.signalingState()}) or remote description already existed.",
+                        severity = "WARN",
+                        pairCode = pairCode
+                    )
                     return
                 }
                 logConnectionReport(
                     stage = "offer-received",
-                    detail = "Host offer received; preparing answer."
+                    detail = "Host offer received; preparing answer for host session ${activeHostSessionId ?: "unknown"}."
                 )
                 try {
                     hasReceivedHostOffer = true
@@ -486,8 +506,24 @@ class CameraSenderService : Service() {
                     readyAnnouncementJob = null
                     offerTimeoutJob?.cancel()
                     offerTimeoutJob = null
-                    val payload = message.payload as? JsonObject ?: return
-                    val sdp = payload["sdp"]?.jsonPrimitive?.content ?: return
+                    val payload = message.payload as? JsonObject ?: run {
+                        logConnectionReport(
+                            stage = "offer-payload-missing",
+                            detail = "Host offer payload was missing or malformed.",
+                            severity = "ERROR",
+                            pairCode = pairCode
+                        )
+                        return
+                    }
+                    val sdp = payload["sdp"]?.jsonPrimitive?.content ?: run {
+                        logConnectionReport(
+                            stage = "offer-sdp-missing",
+                            detail = "Host offer was missing the SDP payload.",
+                            severity = "ERROR",
+                            pairCode = pairCode
+                        )
+                        return
+                    }
                     withTimeout(10_000) {
                         rtcPeer.setRemoteDescriptionAwait(SessionDescription(SessionDescription.Type.OFFER, sdp))
                     }
@@ -530,7 +566,7 @@ class CameraSenderService : Service() {
                                 type = "answer",
                                 from = "sender",
                                 ts = System.currentTimeMillis(),
-                                sessionId = activeSessionId,
+                                sessionId = activeSessionId ?: message.sessionId,
                                 payload = buildJsonObject {
                                     put("type", answer.type.canonicalForm())
                                     put("sdp", answer.description)
@@ -574,9 +610,6 @@ class CameraSenderService : Service() {
                         detail = "Host ICE candidates are being received.",
                         pairCode = pairCode
                     )
-                }
-                if (message.sessionId != null) {
-                    activeHostSessionId = message.sessionId
                 }
                 if (rtcPeer.remoteDescription != null) {
                     rtcPeer.addIceCandidate(candidate)
