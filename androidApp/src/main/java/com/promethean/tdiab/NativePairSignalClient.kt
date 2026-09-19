@@ -149,6 +149,15 @@ class NativePairSignalClient(
         return root
     }
 
+    private fun logSignalTrace(stage: String, detail: String, severity: String = "INFO") {
+        ApplicationReportHub.recordConnection(
+            pairCode = pairCode,
+            stage = stage,
+            detail = detail,
+            severity = severity
+        )
+    }
+
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
@@ -218,16 +227,34 @@ class NativePairSignalClient(
             }
 
             if (frame.event == "broadcast") {
+                logSignalTrace(
+                    "native-signal-frame-received",
+                    "Received realtime broadcast on ${frame.topic}; event=${frame.event}; payloadKeys=${frame.payload.keys.joinToString()}"
+                )
                 val normalizedPayload = extractSignalPayload(frame.payload)
                 if (normalizedPayload == null) {
+                    logSignalTrace(
+                        "native-signal-payload-normalization-failed",
+                        "Realtime broadcast payload was present but could not be normalized.",
+                        "WARN"
+                    )
                     return
                 }
 
                 val message = try {
                     json.decodeFromJsonElement(PairSignalMessagePayload.serializer(), normalizedPayload)
-                } catch (_: Throwable) {
+                } catch (error: Throwable) {
+                    logSignalTrace(
+                        "native-signal-decode-failed",
+                        "Realtime broadcast payload decode failed: ${error.message ?: "unknown parse failure"}",
+                        "ERROR"
+                    )
                     return
                 }
+                logSignalTrace(
+                    "native-signal-dispatched",
+                    "Dispatching host signal type=${message.type}; from=${message.from}; session=${message.sessionId ?: "none"}"
+                )
                 scope.launch {
                     onSignalMessage(message)
                 }
