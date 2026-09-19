@@ -13,6 +13,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -137,6 +138,23 @@ class NativePairSignalClient(
 
     private fun nextRef(): String = refCounter.getAndIncrement().toString()
 
+    private fun enqueueJsonCandidate(queue: ArrayDeque<JsonElement>, candidate: JsonElement?) {
+        if (candidate == null || candidate is kotlinx.serialization.json.JsonNull) return
+        queue.add(candidate)
+
+        val primitive = candidate as? JsonPrimitive ?: return
+        if (!primitive.isString) return
+
+        val raw = primitive.content.trim()
+        if (raw.isEmpty() || (raw.first() != '{' && raw.first() != '[')) return
+
+        runCatching {
+            json.parseToJsonElement(raw)
+        }.getOrNull()?.let { parsed ->
+            queue.add(parsed)
+        }
+    }
+
     private fun extractSignalPayload(element: JsonElement?): JsonElement? {
         if (element == null) return null
 
@@ -155,11 +173,7 @@ class NativePairSignalClient(
                 return currentObject
             }
 
-            currentObject.values.forEach { value ->
-                if (value != null && value !is kotlinx.serialization.json.JsonNull) {
-                    queue.add(value)
-                }
-            }
+            currentObject.values.forEach { value -> enqueueJsonCandidate(queue, value) }
         }
 
         return element
@@ -186,11 +200,7 @@ class NativePairSignalClient(
                 if (normalized != null) return normalized
             }
 
-            objectCandidate.values.forEach { value ->
-                if (value != null && value !is kotlinx.serialization.json.JsonNull) {
-                    queue.add(value)
-                }
-            }
+            objectCandidate.values.forEach { value -> enqueueJsonCandidate(queue, value) }
         }
 
         return null
