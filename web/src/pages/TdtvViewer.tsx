@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   deriveBroadcastChannelsFromTournaments,
+  getBroadcastOverlayFrames,
   getBroadcastPublicationByChannelId,
   getBroadcastChannelById,
   getPublishedBroadcastLiveStream,
@@ -35,6 +36,7 @@ export default function TdtvViewer() {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [lobbySlideIndex, setLobbySlideIndex] = useState(0);
+  const [overlayIndex, setOverlayIndex] = useState(0);
   const playerRef = useRef<HTMLDivElement | null>(null);
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const relayRef = useRef<ViewerChannelRelay | null>(null);
@@ -61,13 +63,24 @@ export default function TdtvViewer() {
       location: fallback?.location ?? 'Location pending',
       now: fallback?.now ?? 'No live stream selected',
       next: fallback?.next ?? 'Awaiting match assignment',
+      format: fallback?.format ?? 'Tournament',
+      round: fallback?.round ?? 'Live',
       watching: fallback?.watching ?? 0,
-      route: fallback?.route ?? '/tournaments'
+      route: fallback?.route ?? '/tournaments',
+      players: fallback?.players ?? [
+        { id: 'player-1', name: 'Player 1', score: 0 },
+        { id: 'player-2', name: 'Player 2', score: 0 }
+      ]
     };
   }, [channelId, filteredChannels, channels]);
   const isLobbyChannel = activeChannel.id === TDTV_LOOP_CHANNEL_ID;
   const activeLobbySlide = lobbySlides[lobbySlideIndex % Math.max(1, lobbySlides.length)] ?? null;
   const activePublication = getBroadcastPublicationByChannelId(activeChannel.id);
+  const overlayFrames = useMemo(
+    () => (isLobbyChannel ? [] : getBroadcastOverlayFrames(activePublication)),
+    [activePublication, isLobbyChannel]
+  );
+  const activeOverlay = overlayFrames[overlayIndex % Math.max(1, overlayFrames.length)] ?? null;
   const publishedStream = getPublishedBroadcastLiveStream(activeChannel.id);
   const effectiveStream = publishedStream ?? relayStream;
   const liveStreamUrl = isLobbyChannel ? '' : (activePublication?.streamUrl ?? '');
@@ -150,6 +163,21 @@ export default function TdtvViewer() {
       window.clearInterval(timer);
     };
   }, [isLobbyChannel, lobbySlides.length]);
+
+  useEffect(() => {
+    setOverlayIndex(0);
+  }, [activeChannel.id, activePublication?.updatedAt, overlayFrames.length]);
+
+  useEffect(() => {
+    if (isLobbyChannel || overlayFrames.length <= 1) return;
+    const durationMs = Math.max(1, activeOverlay?.durationSeconds ?? 8) * 1000;
+    const timer = window.setTimeout(() => {
+      setOverlayIndex((current) => (current + 1) % overlayFrames.length);
+    }, durationMs);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [activeOverlay?.durationSeconds, activeOverlay?.id, isLobbyChannel, overlayFrames.length]);
 
   useEffect(() => {
     setIsVideoReady(false);
@@ -312,17 +340,47 @@ export default function TdtvViewer() {
                 </button>
               </div>
               <div className="player-overlay">
-                {isLobbyChannel && activeLobbySlide?.logoDataUrl ? (
-                  <div className="loop-sponsor-lockup">
-                    <img src={activeLobbySlide.logoDataUrl} alt={`${activeLobbySlide.title} logo`} />
-                  </div>
-                ) : null}
-                <h1>{isLobbyChannel ? activeLobbySlide?.title ?? activeChannel.now : activeChannel.now}</h1>
-                <p>
-                  {isLobbyChannel
-                    ? activeLobbySlide?.body ?? 'TDTV network programming loop.'
-                    : `${activeChannel.venue} • ${activeChannel.location}`}
-                </p>
+                {isLobbyChannel ? (
+                  <>
+                    {activeLobbySlide?.logoDataUrl ? (
+                      <div className="loop-sponsor-lockup">
+                        <img src={activeLobbySlide.logoDataUrl} alt={`${activeLobbySlide.title} logo`} />
+                      </div>
+                    ) : null}
+                    <h1>{activeLobbySlide?.title ?? activeChannel.now}</h1>
+                    <p>{activeLobbySlide?.body ?? 'TDTV network programming loop.'}</p>
+                  </>
+                ) : activeOverlay ? (
+                  <>
+                    <div className="overlay-slot-meta">
+                      <span className="overlay-slot-label">{activeOverlay.label}</span>
+                      <span className="overlay-slot-duration">{activeOverlay.durationSeconds}s</span>
+                    </div>
+                    {activeOverlay.logoDataUrl ? (
+                      <div className="loop-sponsor-lockup">
+                        <img src={activeOverlay.logoDataUrl} alt={`${activeOverlay.title} logo`} />
+                      </div>
+                    ) : null}
+                    <h1>{activeOverlay.title}</h1>
+                    {activeOverlay.players ? (
+                      <div className="overlay-race-players">
+                        {activeOverlay.players.map((player, index) => (
+                          <div key={`${activeOverlay.id}-${player.id || index}`} className="overlay-race-player">
+                            <strong>{player.name}</strong>
+                            <span>{activeOverlay.showScores ? player.score : `ID ${player.id.slice(0, 8) || 'pending'}`}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p>{activeOverlay.subtitle}</p>
+                    {activeOverlay.caption ? <small className="overlay-caption">{activeOverlay.caption}</small> : null}
+                  </>
+                ) : (
+                  <>
+                    <h1>{activeChannel.now}</h1>
+                    <p>{`${activeChannel.venue} • ${activeChannel.location}`}</p>
+                  </>
+                )}
               </div>
             </section>
 

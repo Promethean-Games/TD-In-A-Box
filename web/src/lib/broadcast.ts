@@ -1,3 +1,5 @@
+import type { AccessTier } from '@/lib/subscription';
+import { hasEntitlement } from '@/lib/subscription';
 import type { Tournament } from '@/lib/tournament';
 import { getPublicAssetPath } from '@/lib/appPaths';
 
@@ -77,6 +79,17 @@ export interface BroadcastRuntimeConfig {
   streamStatus: BroadcastStatus;
 }
 
+export interface BroadcastPublicationOverlayConfig {
+  accessTier: AccessTier;
+  sponsorCards: BroadcastSponsorCard[];
+  timingSlots: BroadcastTimingSlot[];
+  overlayDurationSeconds: number;
+  autoRotateSponsors: boolean;
+  raceTrackingEnabled: boolean;
+  winnersRaceTo: number;
+  losersRaceTo: number;
+}
+
 export interface BroadcastPublication {
   channelId: string;
   channelNumber: string;
@@ -96,7 +109,21 @@ export interface BroadcastPublication {
   cameraType: BroadcastCameraSource['type'];
   streamUrl?: string;
   tableNumber?: number | null;
+  overlayConfig?: BroadcastPublicationOverlayConfig;
   updatedAt: string;
+}
+
+export interface BroadcastOverlayFrame {
+  id: string;
+  kind: BroadcastTimingSlotKind | 'DEFAULT';
+  label: string;
+  durationSeconds: number;
+  title: string;
+  subtitle: string;
+  caption?: string;
+  logoDataUrl?: string;
+  players?: [BroadcastPlayerScore, BroadcastPlayerScore];
+  showScores?: boolean;
 }
 
 export const PROMETHEAN_SPONSOR_ID = 'promethean-games';
@@ -265,6 +292,52 @@ function normalizeSponsorCard(card: Partial<BroadcastSponsorCard>): BroadcastSpo
   };
 }
 
+function normalizePublicationOverlayConfig(
+  raw: Partial<BroadcastPublicationOverlayConfig> | null | undefined
+): BroadcastPublicationOverlayConfig | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const fallback = createDefaultBroadcastRuntimeConfig();
+  const accessTier = raw.accessTier;
+  if (
+    accessTier !== 'BASIC' &&
+    accessTier !== 'PRO' &&
+    accessTier !== 'PRO_PLUS' &&
+    accessTier !== 'VENUE' &&
+    accessTier !== 'INTERNAL'
+  ) {
+    return null;
+  }
+
+  const sponsorCards = Array.isArray(raw.sponsorCards) && raw.sponsorCards.length > 0
+    ? ensurePermanentSponsors(raw.sponsorCards.map((card) => normalizeSponsorCard(card)))
+    : fallback.sponsorCards;
+  const timingSlots = Array.isArray(raw.timingSlots) && raw.timingSlots.length > 0
+    ? raw.timingSlots.map((slot) => ({
+        id: typeof slot.id === 'string' ? slot.id : `slot-${Date.now()}-${Math.random()}`,
+        label: typeof slot.label === 'string' && slot.label.trim().length > 0 ? slot.label : 'Overlay Slot',
+        kind:
+          slot.kind === 'SPONSOR' || slot.kind === 'LEADERBOARD' || slot.kind === 'RACE' || slot.kind === 'CUSTOM'
+            ? slot.kind
+            : 'CUSTOM',
+        durationSeconds: typeof slot.durationSeconds === 'number' ? Math.max(5, slot.durationSeconds) : 15,
+        enabled: Boolean(slot.enabled ?? true),
+        permanent: Boolean(slot.permanent ?? (slot.kind === 'LEADERBOARD' || slot.kind === 'RACE'))
+      }))
+    : fallback.timingSlots;
+
+  return {
+    accessTier,
+    sponsorCards,
+    timingSlots,
+    overlayDurationSeconds:
+      typeof raw.overlayDurationSeconds === 'number' ? Math.max(1, raw.overlayDurationSeconds) : fallback.overlayDurationSeconds,
+    autoRotateSponsors: Boolean(raw.autoRotateSponsors ?? fallback.autoRotateSponsors),
+    raceTrackingEnabled: Boolean(raw.raceTrackingEnabled ?? fallback.raceTrackingEnabled),
+    winnersRaceTo: typeof raw.winnersRaceTo === 'number' ? Math.max(1, raw.winnersRaceTo) : fallback.winnersRaceTo,
+    losersRaceTo: typeof raw.losersRaceTo === 'number' ? Math.max(1, raw.losersRaceTo) : fallback.losersRaceTo
+  };
+}
+
 function ensurePermanentSponsors(cards: BroadcastSponsorCard[]): BroadcastSponsorCard[] {
   const normalized = cards.map((card) => normalizeSponsorCard(card));
   const nextCards = [...normalized];
@@ -374,6 +447,29 @@ export function saveBroadcastRuntimeConfig(config: BroadcastRuntimeConfig): Broa
   return config;
 }
 
+export function createBroadcastPublicationOverlayConfig(
+  config: BroadcastRuntimeConfig,
+  accessTier: AccessTier
+): BroadcastPublicationOverlayConfig {
+  return {
+    accessTier,
+    sponsorCards: ensurePermanentSponsors(config.sponsorCards.map((card) => normalizeSponsorCard(card))),
+    timingSlots: config.timingSlots.map((slot) => ({
+      id: slot.id,
+      label: slot.label,
+      kind: slot.kind,
+      durationSeconds: Math.max(5, Number(slot.durationSeconds) || 5),
+      enabled: Boolean(slot.enabled),
+      permanent: Boolean(slot.permanent)
+    })),
+    overlayDurationSeconds: Math.max(1, Number(config.overlayDurationSeconds) || 1),
+    autoRotateSponsors: Boolean(config.autoRotateSponsors),
+    raceTrackingEnabled: Boolean(config.raceTrackingEnabled),
+    winnersRaceTo: Math.max(1, Number(config.winnersRaceTo) || 1),
+    losersRaceTo: Math.max(1, Number(config.losersRaceTo) || 1)
+  };
+}
+
 function normalizeBroadcastPlayer(player: Partial<BroadcastPlayerScore> | null | undefined, fallbackName: string): BroadcastPlayerScore {
   return {
     id: typeof player?.id === 'string' ? player.id : '',
@@ -411,8 +507,109 @@ function normalizeBroadcastPublication(raw: Partial<BroadcastPublication> | null
       : 'WIFI',
     streamUrl: typeof raw.streamUrl === 'string' && raw.streamUrl.trim().length > 0 ? raw.streamUrl : undefined,
     tableNumber: typeof raw.tableNumber === 'number' ? Math.max(1, Math.floor(raw.tableNumber)) : null,
+    overlayConfig: normalizePublicationOverlayConfig(raw.overlayConfig),
     updatedAt: typeof raw.updatedAt === 'string' && raw.updatedAt.trim().length > 0 ? raw.updatedAt : new Date().toISOString()
   };
+}
+
+export function getBroadcastOverlayFrames(
+  publication: BroadcastPublication | null | undefined
+): BroadcastOverlayFrame[] {
+  if (!publication) return [];
+
+  const defaultFrame: BroadcastOverlayFrame = {
+    id: 'default-live-overlay',
+    kind: 'DEFAULT',
+    label: 'Live Coverage',
+    durationSeconds: publication.overlayConfig?.overlayDurationSeconds ?? 8,
+    title: publication.now || publication.tournamentName || 'Tournament stream',
+    subtitle: `${publication.venue} • ${publication.location}`,
+    caption: `${publication.format} • ${publication.round}`
+  };
+  const overlayConfig = publication.overlayConfig;
+  if (!overlayConfig) {
+    return [defaultFrame];
+  }
+
+  const canShowBasicOverlays = hasEntitlement(overlayConfig.accessTier, 'broadcast.overlays');
+  const canShowAdvancedOverlays = hasEntitlement(overlayConfig.accessTier, 'broadcast.overlays_advanced');
+  const canRotateSponsors =
+    overlayConfig.autoRotateSponsors && hasEntitlement(overlayConfig.accessTier, 'broadcast.sponsors');
+  if (!canShowBasicOverlays) {
+    return [defaultFrame];
+  }
+
+  const sponsorBySlotId = new Map(
+    overlayConfig.sponsorCards.map((sponsor) => [`slot-${sponsor.id}`, sponsor] as const)
+  );
+  const frames = overlayConfig.timingSlots
+    .filter((slot) => slot.enabled)
+    .flatMap((slot): BroadcastOverlayFrame[] => {
+      if (slot.kind === 'SPONSOR') {
+        if (!canRotateSponsors) return [];
+        const sponsor = sponsorBySlotId.get(slot.id);
+        if (!sponsor || !sponsor.enabled) return [];
+        return [
+          {
+            id: slot.id,
+            kind: slot.kind,
+            label: slot.label,
+            durationSeconds: slot.durationSeconds,
+            title: sponsor.name,
+            subtitle: sponsor.marketingBlip?.trim() || 'Thanks for supporting live pool coverage on TDTV.',
+            caption: `${publication.venue} • ${publication.location}`,
+            logoDataUrl: sponsor.logoDataUrl
+          }
+        ];
+      }
+
+      if (slot.kind === 'CUSTOM') {
+        if (!canShowAdvancedOverlays) return [];
+        return [
+          {
+            id: slot.id,
+            kind: slot.kind,
+            label: slot.label,
+            durationSeconds: slot.durationSeconds,
+            title: publication.channelName,
+            subtitle: `${publication.tournamentName} • ${publication.format}`,
+            caption: publication.next ? `Up next: ${publication.next}` : `${publication.venue} • ${publication.location}`
+          }
+        ];
+      }
+
+      if (slot.kind === 'RACE') {
+        return [
+          {
+            id: slot.id,
+            kind: slot.kind,
+            label: slot.label,
+            durationSeconds: slot.durationSeconds,
+            title: publication.round || 'Featured table',
+            subtitle: overlayConfig.raceTrackingEnabled
+              ? `Winners race to ${overlayConfig.winnersRaceTo} • Losers race to ${overlayConfig.losersRaceTo}`
+              : 'Player introductions and current match-up',
+            caption: publication.next ? `Up next: ${publication.next}` : publication.format,
+            players: publication.players,
+            showScores: overlayConfig.raceTrackingEnabled
+          }
+        ];
+      }
+
+      return [
+        {
+          id: slot.id,
+          kind: slot.kind,
+          label: slot.label,
+          durationSeconds: slot.durationSeconds,
+          title: publication.now || publication.tournamentName || 'Tournament stream',
+          subtitle: `${publication.venue} • ${publication.location}`,
+          caption: `${publication.format} • ${publication.round}${publication.next ? ` • Up next: ${publication.next}` : ''}`
+        }
+      ];
+    });
+
+  return frames.length > 0 ? frames : [defaultFrame];
 }
 
 function publicationToChannel(publication: BroadcastPublication): BroadcastChannel {

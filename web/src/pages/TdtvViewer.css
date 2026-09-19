@@ -169,6 +169,68 @@
   color: rgba(255, 255, 255, 0.8);
 }
 
+.overlay-slot-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.overlay-slot-label,
+.overlay-slot-duration {
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.overlay-slot-label {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.overlay-slot-duration {
+  color: #ffd3d8;
+  background: rgba(255, 77, 89, 0.16);
+  border: 1px solid rgba(255, 77, 89, 0.22);
+}
+
+.overlay-race-players {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.overlay-race-player {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px 12px;
+}
+
+.overlay-race-player strong {
+  font-size: 1rem;
+}
+
+.overlay-race-player span {
+  color: rgba(255, 255, 255, 0.82);
+  font-weight: 700;
+}
+
+.overlay-caption {
+  display: block;
+  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.8rem;
+}
+
 .viewer-info {
   display: flex;
   justify-content: space-between;

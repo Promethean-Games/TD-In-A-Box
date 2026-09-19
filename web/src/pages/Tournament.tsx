@@ -32,6 +32,7 @@ import {
   type BroadcastTimingSlot,
   clearBroadcastPublication,
   clearPublishedBroadcastLiveStream,
+  createBroadcastPublicationOverlayConfig,
   getBroadcastPublicationByTournamentId,
   getBroadcastRuntimeConfig,
   publishBroadcastLiveStream,
@@ -633,9 +634,20 @@ export default function Tournament() {
       cameraType: selectedCameraSource?.type ?? 'WIFI',
       streamUrl,
       tableNumber: activeCameraTable ?? null,
+      overlayConfig: createBroadcastPublicationOverlayConfig(broadcastConfig, accessTier),
       updatedAt: new Date().toISOString()
     };
-  }, [activeCameraTable, allowedBroadcastChannels, broadcastConfig.channelId, broadcastConfig.streamStatus, currentTournament, matches, players, selectedBroadcastChannel, selectedCameraSource]);
+  }, [
+    accessTier,
+    activeCameraTable,
+    allowedBroadcastChannels,
+    broadcastConfig,
+    currentTournament,
+    matches,
+    players,
+    selectedBroadcastChannel,
+    selectedCameraSource
+  ]);
 
   useEffect(() => {
     if (!currentTournament?.id) return;

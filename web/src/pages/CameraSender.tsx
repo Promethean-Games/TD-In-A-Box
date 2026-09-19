@@ -23,6 +23,88 @@ type FullscreenElement = HTMLElement & {
   msRequestFullscreen?: () => Promise<void> | void;
 };
 
+type BatteryManagerLike = {
+  level: number;
+  charging: boolean;
+  addEventListener: (type: 'levelchange' | 'chargingchange', listener: () => void) => void;
+  removeEventListener: (type: 'levelchange' | 'chargingchange', listener: () => void) => void;
+};
+
+type NetworkInformationLike = {
+  effectiveType?: string;
+  downlink?: number;
+  addEventListener?: (type: 'change', listener: () => void) => void;
+  removeEventListener?: (type: 'change', listener: () => void) => void;
+};
+
+type CameraSectionKey = 'pairCode' | 'guide' | 'preview' | 'connection' | 'advanced';
+
+declare global {
+  interface Window {
+    __tdiabReconnectCamera?: () => void;
+    __tdiabStopCamera?: () => void;
+    __tdiabCameraState?: () => 'connected' | 'connecting' | 'disconnected';
+  }
+}
+
+function formatClock(date: Date): string {
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatBatteryLabel(level: number | null, charging: boolean | null): string {
+  if (level === null) return charging ? 'Charging' : 'Battery';
+  const percentage = Math.round(level * 100);
+  return charging ? `${percentage}% charging` : `${percentage}%`;
+}
+
+function describeConnection(
+  online: boolean,
+  effectiveType: string,
+  downlink: number | null,
+  isConnected: boolean,
+  signalTransport: 'supabase' | 'broadcast-channel' | null
+): { quality: string; detail: string } {
+  if (!online) {
+    return {
+      quality: 'Offline',
+      detail: 'Reconnect to Wi-Fi or cellular data.'
+    };
+  }
+
+  if (downlink !== null && downlink >= 10) {
+    return {
+      quality: isConnected ? 'Excellent' : 'Strong',
+      detail: signalTransport === 'supabase' ? 'Realtime transport locked.' : 'Ready for local channel pairing.'
+    };
+  }
+
+  if (effectiveType === '4g') {
+    return {
+      quality: isConnected ? 'Excellent' : 'Strong',
+      detail: signalTransport === 'supabase' ? 'Network relay active.' : 'High-speed network detected.'
+    };
+  }
+
+  if (effectiveType === '3g') {
+    return {
+      quality: 'Good',
+      detail: 'Stable enough for camera pairing.'
+    };
+  }
+
+  if (effectiveType === '2g' || effectiveType === 'slow-2g') {
+    return {
+      quality: 'Weak',
+      detail: 'Video may struggle on this connection.'
+    };
+  }
+
+  return {
+    quality: isConnected ? 'Connected' : 'Checking',
+    detail: signalTransport === 'supabase' ? 'Waiting for host control.' : 'Checking network conditions.'
+  };
+}
+
 export default function CameraSender() {
   const { pairCode = '' } = useParams<{ pairCode: string }>();
   const normalizedPairCode = useMemo(() => pairCode.trim().toUpperCase(), [pairCode]);
@@ -31,6 +113,22 @@ export default function CameraSender() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [signalTransport, setSignalTransport] = useState<'supabase' | 'broadcast-channel' | null>(null);
+  const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
+  const [clock, setClock] = useState(() => new Date());
+  const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
+  const [isCharging, setIsCharging] = useState<boolean | null>(null);
+  const [networkState, setNetworkState] = useState(() => ({
+    online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    effectiveType: '',
+    downlink: null as number | null
+  }));
+  const [openSections, setOpenSections] = useState<Record<CameraSectionKey, boolean>>({
+    pairCode: true,
+    guide: true,
+    preview: true,
+    connection: false,
+    advanced: false
+  });
   const pairDiagnostics = useMemo(
     () => getPairSignalDiagnostics(normalizedPairCode || 'pending'),
     [normalizedPairCode]
@@ -40,6 +138,9 @@ export default function CameraSender() {
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const signalClientRef = useRef<PairSignalClient | null>(null);
   const previewShellRef = useRef<HTMLDivElement | null>(null);
+  const topRef = useRef<HTMLElement | null>(null);
+  const guideRef = useRef<HTMLDivElement | null>(null);
+  const advancedRef = useRef<HTMLDivElement | null>(null);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const manualStopRef = useRef(false);
   const hasActivatedSessionRef = useRef(false);
@@ -49,7 +150,40 @@ export default function CameraSender() {
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const stopSessionRef = useRef<(notifyHost?: boolean) => Promise<void>>(async () => undefined);
   const connectCameraRef = useRef<(mode?: 'manual' | 'auto') => Promise<void>>(async () => undefined);
-  const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
+
+  const pairingAvailabilityError = useMemo(() => getPairingAvailabilityError(), []);
+  const transportLabel = signalTransport === 'supabase' ? 'Supabase Realtime' : signalTransport === 'broadcast-channel' ? 'Local Channel' : 'Waiting';
+  const connectionSummary = useMemo(
+    () =>
+      describeConnection(
+        networkState.online,
+        networkState.effectiveType,
+        networkState.downlink,
+        isConnected,
+        signalTransport
+      ),
+    [isConnected, networkState.downlink, networkState.effectiveType, networkState.online, signalTransport]
+  );
+  const heroStateLabel = isConnected ? 'LIVE' : isConnecting ? 'LINKING' : error ? 'ATTENTION' : 'READY';
+  const heroStateTone = isConnected ? 'live' : isConnecting ? 'linking' : error ? 'attention' : 'ready';
+  const heroHeading = isConnected ? 'Remote Camera' : 'Remote Camera Standby';
+  const heroSubheading = isConnected
+    ? 'Connected to TDTV host'
+    : isConnecting
+      ? 'Securing camera and host session'
+      : 'Waiting for your tournament broadcast to pair';
+
+  const scrollToSection = (element: HTMLElement | null) => {
+    if (!element) return;
+    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const toggleSection = (key: CameraSectionKey) => {
+    setOpenSections((current) => ({
+      ...current,
+      [key]: !current[key]
+    }));
+  };
 
   const notifyNativeStatus = (nextStatus: string) => {
     const bridge = (window as Window & {
@@ -146,8 +280,74 @@ export default function CameraSender() {
   stopSessionRef.current = stopSession;
 
   useEffect(() => {
+    const clockTimer = window.setInterval(() => setClock(new Date()), 30000);
+    return () => {
+      window.clearInterval(clockTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       clearReconnectTimer();
+    };
+  }, []);
+
+  useEffect(() => {
+    const navigatorWithBattery = navigator as Navigator & {
+      getBattery?: () => Promise<BatteryManagerLike>;
+    };
+    if (!navigatorWithBattery.getBattery) return;
+
+    let batteryManager: BatteryManagerLike | null = null;
+    const syncBattery = () => {
+      if (!batteryManager) return;
+      setBatteryLevel(batteryManager.level);
+      setIsCharging(batteryManager.charging);
+    };
+
+    void navigatorWithBattery.getBattery().then((battery) => {
+      batteryManager = battery;
+      syncBattery();
+      battery.addEventListener('levelchange', syncBattery);
+      battery.addEventListener('chargingchange', syncBattery);
+    });
+
+    return () => {
+      if (!batteryManager) return;
+      batteryManager.removeEventListener('levelchange', syncBattery);
+      batteryManager.removeEventListener('chargingchange', syncBattery);
+    };
+  }, []);
+
+  useEffect(() => {
+    const navigatorWithConnection = navigator as Navigator & {
+      connection?: NetworkInformationLike;
+      mozConnection?: NetworkInformationLike;
+      webkitConnection?: NetworkInformationLike;
+    };
+    const connection =
+      navigatorWithConnection.connection ??
+      navigatorWithConnection.mozConnection ??
+      navigatorWithConnection.webkitConnection ??
+      null;
+
+    const syncConnection = () => {
+      setNetworkState({
+        online: navigator.onLine,
+        effectiveType: connection?.effectiveType ?? '',
+        downlink: typeof connection?.downlink === 'number' ? connection.downlink : null
+      });
+    };
+
+    syncConnection();
+    window.addEventListener('online', syncConnection);
+    window.addEventListener('offline', syncConnection);
+    connection?.addEventListener?.('change', syncConnection);
+
+    return () => {
+      window.removeEventListener('online', syncConnection);
+      window.removeEventListener('offline', syncConnection);
+      connection?.removeEventListener?.('change', syncConnection);
     };
   }, []);
 
@@ -166,6 +366,29 @@ export default function CameraSender() {
   useEffect(() => {
     notifyNativeConnection(isConnected);
   }, [isConnected]);
+
+  useEffect(() => {
+    window.__tdiabReconnectCamera = () => {
+      if (!hasActivatedSessionRef.current) return;
+      if (manualStopRef.current) return;
+      void connectCameraRef.current('auto');
+    };
+    window.__tdiabStopCamera = () => {
+      manualStopRef.current = true;
+      void stopSessionRef.current();
+    };
+    window.__tdiabCameraState = () => {
+      if (isConnectingRef.current) return 'connecting';
+      if (isConnectedRef.current) return 'connected';
+      return 'disconnected';
+    };
+
+    return () => {
+      delete window.__tdiabReconnectCamera;
+      delete window.__tdiabStopCamera;
+      delete window.__tdiabCameraState;
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -191,7 +414,6 @@ export default function CameraSender() {
   }, []);
 
   const handleSignalMessage = async (message: PairSignalMessage) => {
-    console.debug('[camera-sender] signal message received', message);
     if (message.from !== 'host') return;
     const peer = peerRef.current;
     const signalClient = signalClientRef.current;
@@ -235,8 +457,8 @@ export default function CameraSender() {
       return;
     }
     if (!isSupabaseConfigured) {
-      const pairingError = getPairingAvailabilityError();
-      setError(pairingError ?? 'Remote camera pairing requires Supabase realtime signaling.');
+      const nextPairingError = getPairingAvailabilityError();
+      setError(nextPairingError ?? 'Remote camera pairing requires Supabase realtime signaling.');
       setStatus('Unavailable: Supabase signaling not configured');
       return;
     }
@@ -254,7 +476,6 @@ export default function CameraSender() {
     isConnectingRef.current = true;
     setError(null);
     setStatus(mode === 'auto' ? 'Reconnecting camera…' : 'Opening camera...');
-    console.debug('[camera-sender] start connect', { pairCode: normalizedPairCode, diagnostics: pairDiagnostics });
     try {
       clearReconnectTimer();
       await stopSession(false);
@@ -280,7 +501,6 @@ export default function CameraSender() {
       const signalClient = await createPairSignalClient(normalizedPairCode, handleSignalMessage);
       signalClientRef.current = signalClient;
       setSignalTransport(signalClient.transport);
-      console.debug('[camera-sender] signaling transport ready', signalClient.transport, pairDiagnostics);
 
       const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
       peerRef.current = peer;
@@ -299,6 +519,12 @@ export default function CameraSender() {
           setIsConnected(true);
           isConnectedRef.current = true;
           setStatus('Live connection established');
+          setOpenSections((current) => ({
+            ...current,
+            pairCode: false,
+            preview: true,
+            connection: true
+          }));
           void requestWakeLock();
         } else if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
           setStatus(`Connection ${peer.connectionState}`);
@@ -418,106 +644,318 @@ export default function CameraSender() {
   };
 
   return (
-    <section className="camera-sender-page">
-      <header className="camera-sender-header">
-        <p className="camera-sender-eyebrow">TDTV Remote Camera</p>
-        <h1>Pair Code: {normalizedPairCode || 'Missing'}</h1>
-        <p>Use this phone as a wireless table camera for the active tournament broadcast.</p>
-      </header>
-
-      <div className="camera-sender-actions">
-        {!isConnected ? (
-          <button type="button" className="btn-primary" onClick={() => void connectCamera('manual')} disabled={isConnecting}>
-            {isConnecting ? 'Connecting...' : 'Connect Camera'}
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => {
-              manualStopRef.current = true;
-              void stopSession();
-            }}
-          >
-            Stop Camera Feed
-          </button>
-        )}
-        <Link className="btn-link" to="/">
-          Return to Dashboard
-        </Link>
-      </div>
-
-      <div className="camera-sender-status" role="status" aria-live="polite">
-        <strong>Status:</strong> {status}
-        {signalTransport ? <span> via {signalTransport === 'supabase' ? 'Supabase signaling' : 'Local signaling'}</span> : null}
-      </div>
-
-      <div className="camera-sender-debug">
-        <strong>Debug info</strong>
-        <div className="camera-sender-debug-grid">
-          <div>
-            <span>Transport</span>
-            <strong>{signalTransport ?? 'Waiting'}</strong>
-          </div>
-          <div>
-            <span>Supabase</span>
-            <strong>{pairDiagnostics.supabaseConfigured ? 'Configured' : 'Missing'}</strong>
-          </div>
-          <div>
-            <span>BroadcastChannel</span>
-            <strong>{pairDiagnostics.hasBroadcastChannel ? 'Supported' : 'Unavailable'}</strong>
-          </div>
-          <div>
-            <span>Signal key</span>
-            <strong>{pairDiagnostics.signalSessionKey}</strong>
+    <section className="camera-remote-page" ref={topRef}>
+      <header className="camera-remote-header">
+        <div className="camera-remote-statusbar">
+          <span>{formatClock(clock)}</span>
+          <div className="camera-remote-statusbar-meta">
+            <span>{connectionSummary.quality}</span>
+            <span>{formatBatteryLabel(batteryLevel, isCharging)}</span>
           </div>
         </div>
-        {!pairDiagnostics.signalReady ? (
-          <small className="camera-sender-status-note">
-            Remote camera pairing needs Supabase signaling or a browser BroadcastChannel to exchange ICE and SDP offers.
-          </small>
-        ) : null}
-      </div>
+
+        <div className="camera-remote-brandbar">
+          <div className="camera-remote-brand">
+            <strong>TDTV</strong>
+            <span>TDIAB Network</span>
+          </div>
+          <div className="camera-remote-brand-copy">
+            <h1>Remote Camera</h1>
+            <p>Capture • Stream • TDTV</p>
+          </div>
+          <button
+            type="button"
+            className="camera-remote-settings"
+            onClick={() => scrollToSection(advancedRef.current)}
+            aria-label="Open advanced troubleshooting"
+          >
+            ⚙
+          </button>
+        </div>
+      </header>
+
+      <section className={`camera-hero-card camera-hero-card--${heroStateTone}`}>
+        <div className="camera-hero-head">
+          <div className={`camera-live-pill camera-live-pill--${heroStateTone}`}>
+            <span className="camera-live-pill-dot" />
+            <strong>{heroStateLabel}</strong>
+          </div>
+          <div className="camera-quality-badge">
+            <strong>{connectionSummary.quality}</strong>
+            <span>{connectionSummary.detail}</span>
+          </div>
+        </div>
+
+        <div className="camera-hero-copy">
+          <h2>{heroHeading}</h2>
+          <p>{heroSubheading}</p>
+        </div>
+
+        <div className="camera-hero-brief">
+          <div>
+            <span>Pair code</span>
+            <strong>{normalizedPairCode || 'Missing'}</strong>
+          </div>
+          <div>
+            <span>Transport</span>
+            <strong>{transportLabel}</strong>
+          </div>
+          <div>
+            <span>Status</span>
+            <strong>{status}</strong>
+          </div>
+        </div>
+
+        <div className="camera-hero-metrics">
+          <div className={`camera-hero-metric ${isConnected ? 'camera-hero-metric--active' : ''}`}>
+            <strong>{isConnected ? 'Camera Active' : isConnecting ? 'Connecting…' : 'Ready to Pair'}</strong>
+            <span>Capture state</span>
+          </div>
+          <div className="camera-hero-metric">
+            <strong>{formatBatteryLabel(batteryLevel, isCharging)}</strong>
+            <span>Battery</span>
+          </div>
+          <div className="camera-hero-metric">
+            <strong>{networkState.online ? connectionSummary.quality : 'Offline'}</strong>
+            <span>{networkState.effectiveType || 'Network status'}</span>
+          </div>
+        </div>
+      </section>
+
+      <button
+        type="button"
+        className={`camera-primary-action ${isConnected ? 'camera-primary-action--stop' : 'camera-primary-action--start'}`}
+        onClick={() => {
+          if (isConnected) {
+            manualStopRef.current = true;
+            void stopSession();
+            return;
+          }
+          void connectCamera('manual');
+        }}
+        disabled={isConnecting}
+      >
+        {isConnected ? 'Stop Camera' : isConnecting ? 'Connecting…' : 'Connect Camera'}
+      </button>
 
       {error ? (
-        <p className="camera-sender-error" role="alert">
+        <p className="camera-remote-error" role="alert">
           {error}
         </p>
       ) : null}
 
-      <section className="camera-preview-card">
-        <div className="camera-preview-head">
-          <strong>Camera + overlay preview</strong>
-          <button type="button" className="btn-secondary camera-preview-fullscreen" onClick={togglePreviewFullscreen}>
-            {isPreviewFullscreen ? 'Exit Full Screen' : 'Full Screen Preview'}
+      <div className="camera-section-stack">
+        <section className="camera-collapsible-card">
+          <button type="button" className="camera-collapsible-head" onClick={() => toggleSection('pairCode')}>
+            <div>
+              <strong>{isConnected ? 'Pair Code (Not Needed)' : 'Pair Code'}</strong>
+              <span>{isConnected ? 'Camera is currently connected.' : 'Use this code from the host broadcast tab.'}</span>
+            </div>
+            <span className="camera-collapsible-chevron">{openSections.pairCode ? '▾' : '▸'}</span>
           </button>
-        </div>
-        <div className="camera-preview-stage" ref={previewShellRef}>
-          <video ref={previewRef} className="camera-sender-preview" autoPlay muted playsInline controls />
-          <div className="camera-preview-overlay">
-            <div className="camera-preview-overlay-top">
-              <span className={`preview-live-pill ${isConnected ? 'active' : ''}`}>
-                {isConnected ? 'LIVE LINKED' : 'FRAMING'}
-              </span>
-              <span>TDTV remote camera preview</span>
-            </div>
-            <div className="camera-preview-overlay-lower-third">
-              <div className="overlay-player overlay-player--red">
-                <span>Red</span>
-                <strong>Player A</strong>
-              </div>
-              <span className="overlay-vs">VS</span>
-              <div className="overlay-player overlay-player--blue">
-                <span>Blue</span>
-                <strong>Player B</strong>
+          {openSections.pairCode ? (
+            <div className="camera-collapsible-body">
+              <div className="camera-pair-code-panel">
+                <strong>{normalizedPairCode || 'Missing'}</strong>
+                <p>
+                  {normalizedPairCode
+                    ? `Open Tournament Broadcast, choose remote phone camera pairing, and enter ${normalizedPairCode}.`
+                    : 'Open this page from a valid remote camera link to receive a pairing code.'}
+                </p>
               </div>
             </div>
-          </div>
-        </div>
-        <p className="camera-preview-note">
-          Frame this view so player names and race overlays stay readable before the TD goes live.
-        </p>
-      </section>
+          ) : null}
+        </section>
+
+        <section className="camera-collapsible-card" ref={guideRef}>
+          <button type="button" className="camera-collapsible-head" onClick={() => toggleSection('guide')}>
+            <div>
+              <strong>Setup Guide</strong>
+              <span>3 quick steps to get this phone live.</span>
+            </div>
+            <span className="camera-collapsible-chevron">{openSections.guide ? '▾' : '▸'}</span>
+          </button>
+          {openSections.guide ? (
+            <div className="camera-collapsible-body">
+              <ol className="camera-guide-list">
+                <li>
+                  <span>1</span>
+                  <div>
+                    <strong>Open Tournament Broadcast</strong>
+                    <p>Start a broadcast from the TDIAB app on the tournament host device.</p>
+                  </div>
+                </li>
+                <li>
+                  <span>2</span>
+                  <div>
+                    <strong>Get Pair Code</strong>
+                    <p>Copy the remote phone pairing code from the broadcast flow.</p>
+                  </div>
+                </li>
+                <li>
+                  <span>3</span>
+                  <div>
+                    <strong>Connect Camera</strong>
+                    <p>Open this link on the phone, confirm camera access, then tap Connect Camera.</p>
+                  </div>
+                </li>
+              </ol>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="camera-collapsible-card">
+          <button type="button" className="camera-collapsible-head" onClick={() => toggleSection('preview')}>
+            <div>
+              <strong>Camera Preview</strong>
+              <span>Frame the table so overlays and players stay readable.</span>
+            </div>
+            <span className="camera-collapsible-chevron">{openSections.preview ? '▾' : '▸'}</span>
+          </button>
+          {openSections.preview ? (
+            <div className="camera-collapsible-body">
+              <section className="camera-preview-card">
+                <div className="camera-preview-head">
+                  <strong>Live preview</strong>
+                  <button type="button" className="camera-preview-fullscreen" onClick={togglePreviewFullscreen}>
+                    {isPreviewFullscreen ? 'Exit full screen' : 'Full screen'}
+                  </button>
+                </div>
+                <div className="camera-preview-stage" ref={previewShellRef}>
+                  <video ref={previewRef} className="camera-sender-preview" autoPlay muted playsInline controls={false} />
+                  <div className="camera-preview-overlay">
+                    <div className="camera-preview-overlay-top">
+                      <span className={`preview-live-pill ${isConnected ? 'active' : ''}`}>
+                        {isConnected ? 'LIVE LINKED' : 'FRAMING'}
+                      </span>
+                      <span>TDTV remote camera preview</span>
+                    </div>
+                    <div className="camera-preview-overlay-lower-third">
+                      <div className="overlay-player overlay-player--red">
+                        <span>Red</span>
+                        <strong>Player A</strong>
+                      </div>
+                      <span className="overlay-vs">VS</span>
+                      <div className="overlay-player overlay-player--blue">
+                        <span>Blue</span>
+                        <strong>Player B</strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <p className="camera-preview-note">
+                  Keep the cue ball, object balls, and player approach lanes visible. A slightly wider frame is safer than an aggressive crop.
+                </p>
+              </section>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="camera-collapsible-card">
+          <button type="button" className="camera-collapsible-head" onClick={() => toggleSection('connection')}>
+            <div>
+              <strong>Connection</strong>
+              <span>Current link health and camera session state.</span>
+            </div>
+            <span className="camera-collapsible-chevron">{openSections.connection ? '▾' : '▸'}</span>
+          </button>
+          {openSections.connection ? (
+            <div className="camera-collapsible-body">
+              <div className="camera-connection-grid">
+                <div className="camera-connection-tile">
+                  <span>Host link</span>
+                  <strong>{status}</strong>
+                </div>
+                <div className="camera-connection-tile">
+                  <span>Network quality</span>
+                  <strong>{connectionSummary.quality}</strong>
+                </div>
+                <div className="camera-connection-tile">
+                  <span>Signal transport</span>
+                  <strong>{transportLabel}</strong>
+                </div>
+                <div className="camera-connection-tile">
+                  <span>Battery</span>
+                  <strong>{formatBatteryLabel(batteryLevel, isCharging)}</strong>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="camera-collapsible-card" ref={advancedRef}>
+          <button type="button" className="camera-collapsible-head" onClick={() => toggleSection('advanced')}>
+            <div>
+              <strong>Advanced / Troubleshooting</strong>
+              <span>Diagnostics, compatibility, and exit actions.</span>
+            </div>
+            <span className="camera-collapsible-chevron">{openSections.advanced ? '▾' : '▸'}</span>
+          </button>
+          {openSections.advanced ? (
+            <div className="camera-collapsible-body">
+              <div className="camera-debug-card">
+                <strong>Diagnostics</strong>
+                <div className="camera-debug-grid">
+                  <div>
+                    <span>Transport</span>
+                    <strong>{signalTransport ?? 'Waiting'}</strong>
+                  </div>
+                  <div>
+                    <span>Supabase</span>
+                    <strong>{pairDiagnostics.supabaseConfigured ? 'Configured' : 'Missing'}</strong>
+                  </div>
+                  <div>
+                    <span>BroadcastChannel</span>
+                    <strong>{pairDiagnostics.hasBroadcastChannel ? 'Supported' : 'Unavailable'}</strong>
+                  </div>
+                  <div>
+                    <span>Signal key</span>
+                    <strong>{pairDiagnostics.signalSessionKey}</strong>
+                  </div>
+                </div>
+                {!pairDiagnostics.signalReady ? (
+                  <small className="camera-debug-note">
+                    {pairingAvailabilityError ??
+                      'Remote camera pairing needs Supabase signaling or a compatible BroadcastChannel flow to exchange ICE and SDP offers.'}
+                  </small>
+                ) : null}
+              </div>
+
+              <div className="camera-advanced-actions">
+                <button
+                  type="button"
+                  className="camera-advanced-action"
+                  onClick={() => {
+                    manualStopRef.current = false;
+                    void connectCamera('manual');
+                  }}
+                  disabled={isConnecting}
+                >
+                  Retry camera link
+                </button>
+                <Link className="camera-advanced-link" to="/">
+                  Return to Dashboard
+                </Link>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      </div>
+
+      <nav className="camera-bottom-nav" aria-label="Remote camera navigation">
+        <button type="button" className="camera-bottom-nav-item active" onClick={() => scrollToSection(topRef.current)}>
+          <strong>Camera</strong>
+          <span>Live status</span>
+        </button>
+        <button type="button" className="camera-bottom-nav-item" onClick={() => scrollToSection(guideRef.current)}>
+          <strong>Help</strong>
+          <span>Setup guide</span>
+        </button>
+        <button type="button" className="camera-bottom-nav-item" onClick={() => scrollToSection(advancedRef.current)}>
+          <strong>More</strong>
+          <span>Advanced</span>
+        </button>
+      </nav>
     </section>
   );
 }
