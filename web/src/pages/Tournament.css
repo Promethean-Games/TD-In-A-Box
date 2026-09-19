@@ -1711,9 +1711,11 @@
 .broadcast-tab {
   display: grid;
   gap: 10px;
+  width: 100%;
 }
 
 .broadcast-preview-wide {
+  width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
   background: rgba(7, 12, 18, 0.92);
@@ -1857,10 +1859,12 @@
   grid-template-columns: 1fr;
   gap: 10px;
   align-items: start;
+  width: 100%;
 }
 
 .broadcast-panel,
 .broadcast-upgrade-card {
+  width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
@@ -2692,6 +2696,7 @@
 }
 
 .camera-preview-shell {
+  width: 100%;
   border: 1px dashed rgba(116, 217, 255, 0.35);
   border-radius: 10px;
   background: rgba(6, 10, 16, 0.7);
