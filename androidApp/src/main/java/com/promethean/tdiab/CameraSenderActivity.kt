@@ -95,7 +95,13 @@ class CameraSenderActivity : ComponentActivity() {
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            val binder = service as? CameraSenderService.LocalBinder ?: return
+            val binder = service as? CameraSenderService.LocalBinder ?: run {
+                senderBinder = null
+                isServiceBound = false
+                localStatusText = "Camera service unavailable"
+                localErrorText = "Unable to bind the live camera sender service."
+                return
+            }
             senderBinder = binder
             isServiceBound = true
             binderCollectionJob?.cancel()

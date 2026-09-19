@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,7 +73,12 @@ data class SenderUiState(
 )
 
 class CameraSenderService : Service() {
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val serviceExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        runCatching {
+            ApplicationReportHub.recordCrash("CameraSenderService", throwable)
+        }
+    }
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + serviceExceptionHandler)
     private val _uiState = MutableStateFlow(SenderUiState())
     private val localBinder = LocalBinder()
     private val previewRenderers = CopyOnWriteArraySet<SurfaceViewRenderer>()
@@ -652,6 +658,7 @@ class CameraSenderService : Service() {
         hasReceivedHostOffer = false
         hasLoggedInboundIce = false
         hasLoggedOutboundIce = false
+        val stopSessionId = activeSessionId
         activeSessionId = null
         activeHostSessionId = null
         reconnectJob?.cancel()
@@ -666,7 +673,7 @@ class CameraSenderService : Service() {
                         type = "stop",
                         from = "sender",
                         ts = System.currentTimeMillis(),
-                        sessionId = activeSessionId
+                        sessionId = stopSessionId
                     )
                 )
             }
