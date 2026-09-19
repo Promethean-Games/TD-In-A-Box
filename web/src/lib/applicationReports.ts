@@ -25,8 +25,8 @@ export interface ApplicationReport {
 }
 
 const APPLICATION_REPORTS_KEY = 'tdiab_application_reports';
-const REPORT_QUERY_LIMIT = 1000;
-const MAX_STORED_REPORTS = 1000;
+const REPORT_QUERY_LIMIT = 10000;
+const MAX_STORED_REPORTS = 10000;
 
 function normalizeReport(report: Partial<ApplicationReport> & Record<string, unknown>): ApplicationReport {
   const fallbackId = globalThis.crypto?.randomUUID?.() ?? `report-${Date.now()}`;

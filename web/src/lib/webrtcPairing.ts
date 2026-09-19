@@ -61,6 +61,26 @@ export function getPairingAvailabilityError(): string | null {
   return 'Remote camera pairing requires Supabase realtime signaling. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY before trying to pair a phone camera.';
 }
 
+function unwrapSignalEnvelope(payload: unknown): PairSignalMessage | null {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const candidate = payload as Record<string, unknown>;
+  if (typeof candidate.type === 'string' && ['ready', 'offer', 'answer', 'ice', 'stop', 'error'].includes(candidate.type)) {
+    return candidate as PairSignalMessage;
+  }
+
+  const nestedCandidates = [candidate.message, candidate.payload, (candidate.payload as Record<string, unknown> | undefined)?.message, (candidate.payload as Record<string, unknown> | undefined)?.payload];
+  for (const nested of nestedCandidates) {
+    if (!nested || typeof nested !== 'object') continue;
+    const typed = nested as Record<string, unknown>;
+    if (typeof typed.type === 'string' && ['ready', 'offer', 'answer', 'ice', 'stop', 'error'].includes(typed.type)) {
+      return typed as PairSignalMessage;
+    }
+  }
+
+  return null;
+}
+
 export async function createPairSignalClient(
   sessionId: string,
   onMessage: (message: PairSignalMessage) => void
@@ -73,8 +93,8 @@ export async function createPairSignalClient(
     });
 
     channel.on('broadcast', { event: 'signal' }, ({ payload }) => {
-      const message = payload as PairSignalMessage;
-      if (!message || typeof message.type !== 'string') return;
+      const message = unwrapSignalEnvelope(payload);
+      if (!message) return;
       onMessage(message);
     });
 
@@ -127,10 +147,10 @@ export async function createPairSignalClient(
 
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         const fallback = new BroadcastChannel(signalSessionKey);
-        fallback.onmessage = (event: MessageEvent<{ message?: PairSignalMessage; type?: string }>) => {
-          const payload = event?.data?.message ?? event?.data;
-          if (!payload || typeof payload.type !== 'string') return;
-          onMessage(payload as PairSignalMessage);
+        fallback.onmessage = (event: MessageEvent<unknown>) => {
+          const payload = unwrapSignalEnvelope(event?.data);
+          if (!payload) return;
+          onMessage(payload);
         };
 
         return {
@@ -158,10 +178,10 @@ export async function createPairSignalClient(
   }
 
   const fallback = new BroadcastChannel(signalSessionKey);
-  fallback.onmessage = (event: MessageEvent<{ message?: PairSignalMessage; type?: string }>) => {
-    const payload = event?.data?.message ?? event?.data;
-    if (!payload || typeof payload.type !== 'string') return;
-    onMessage(payload as PairSignalMessage);
+  fallback.onmessage = (event: MessageEvent<unknown>) => {
+    const payload = unwrapSignalEnvelope(event?.data);
+    if (!payload) return;
+    onMessage(payload);
   };
 
   return {
