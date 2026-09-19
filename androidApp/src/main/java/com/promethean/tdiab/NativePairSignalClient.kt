@@ -135,21 +135,35 @@ class NativePairSignalClient(
 
     private fun extractSignalPayload(element: JsonElement?): JsonElement? {
         if (element == null) return null
-        val root = element as? JsonObject ?: return element
 
-        val rootEvent = root["event"]?.jsonPrimitive?.content
-        val rootType = root["type"]?.jsonPrimitive?.content
-        if (rootEvent == "signal" || rootType == "broadcast") {
-            return root["payload"] ?: root
+        var current = element
+        var iterations = 0
+        while (iterations < 6) {
+            val root = current as? JsonObject ?: return current
+            val eventName = root["event"]?.jsonPrimitive?.content
+            val typeName = root["type"]?.jsonPrimitive?.content
+            val payloadValue = root["payload"]
+
+            if (eventName == "signal") {
+                current = payloadValue ?: current
+            } else if (typeName == "broadcast") {
+                current = payloadValue ?: current
+            } else if (payloadValue != null && payloadValue !is kotlinx.serialization.json.JsonNull) {
+                val nestedObject = payloadValue as? JsonObject ?: return current
+                val nestedType = nestedObject["type"]?.jsonPrimitive?.content
+                val nestedFrom = nestedObject["from"]?.jsonPrimitive?.content
+                val hasSignalShape = nestedType in setOf("ready", "offer", "answer", "ice", "stop", "error")
+                if (nestedFrom != null || hasSignalShape || nestedObject["sdp"] != null) {
+                    return nestedObject
+                }
+                current = payloadValue
+            } else {
+                return current
+            }
+            iterations += 1
         }
 
-        val payloadField = root["payload"] as? JsonObject ?: return root
-        val payloadEvent = payloadField["event"]?.jsonPrimitive?.content
-        val payloadType = payloadField["type"]?.jsonPrimitive?.content
-        if (payloadEvent == "signal" || payloadType == "broadcast") {
-            return payloadField["payload"] ?: payloadField
-        }
-        return root
+        return current
     }
 
     private fun logSignalTrace(stage: String, detail: String, severity: String = "INFO") {
@@ -229,7 +243,7 @@ class NativePairSignalClient(
                 return
             }
 
-            if (frame.event == "broadcast") {
+            if (frame.event == "broadcast" || frame.event == "signal") {
                 logSignalTrace(
                     "native-signal-frame-received",
                     "Received realtime broadcast on ${frame.topic}; event=${frame.event}; payloadKeys=${frame.payload.keys.joinToString()}"
