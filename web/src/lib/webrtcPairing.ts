@@ -32,12 +32,14 @@ export function getPairSignalDiagnostics(sessionId?: string) {
   const signalSessionKey = sessionId ? `webrtc-pair-${sessionId}` : 'webrtc-pair-pending';
   const hasBroadcastChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window;
   const signalReady = isSupabaseConfigured || hasBroadcastChannel;
+  const turnUrl = import.meta.env.VITE_TURN_URL as string | undefined;
 
   return {
     signalSessionKey,
     hasBroadcastChannel,
     supabaseConfigured: isSupabaseConfigured,
     signalReady,
+    turnConfigured: Boolean(turnUrl),
     recommendedMode: isSupabaseConfigured ? 'supabase' : hasBroadcastChannel ? 'broadcast-channel' : 'unavailable'
   };
 }
@@ -152,7 +154,18 @@ export async function createPairSignalClient(
   };
 }
 
+const TURN_SERVER_URL = import.meta.env.VITE_TURN_URL as string | undefined;
+const TURN_SERVER_USERNAME = import.meta.env.VITE_TURN_USERNAME as string | undefined;
+const TURN_SERVER_CREDENTIAL = import.meta.env.VITE_TURN_CREDENTIAL as string | undefined;
+
 export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' }
+  { urls: 'stun:stun1.l.google.com:19302' },
+  ...(TURN_SERVER_URL
+    ? [{
+        urls: TURN_SERVER_URL,
+        username: TURN_SERVER_USERNAME ?? '',
+        credential: TURN_SERVER_CREDENTIAL ?? '',
+      }]
+    : [])
 ];
