@@ -14,6 +14,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -201,9 +202,13 @@ class NativePairSignalClient(
             }
 
             if (frame.event == "broadcast") {
-                val broadcastEvent = frame.payload["event"]?.toString()?.trim('"')
-                if (broadcastEvent != "signal") return
-                val payloadElement = frame.payload["payload"] ?: return
+                val extracted = frame.payload["payload"]
+                val candidate = when {
+                    extracted is JsonObject && extracted["event"]?.jsonPrimitive?.content == "signal" -> extracted["payload"]
+                    extracted is JsonObject && extracted["type"]?.jsonPrimitive?.content == "broadcast" && extracted["event"]?.jsonPrimitive?.content == "signal" -> extracted["payload"]
+                    else -> extracted
+                }
+                val payloadElement = candidate ?: return
                 val message = try {
                     json.decodeFromJsonElement(PairSignalMessagePayload.serializer(), payloadElement)
                 } catch (_: Throwable) {
