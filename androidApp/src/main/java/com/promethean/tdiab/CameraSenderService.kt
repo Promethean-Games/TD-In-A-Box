@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -72,12 +73,18 @@ data class SenderUiState(
 
 class CameraSenderService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val localBinder = LocalBinder()
     private val _uiState = MutableStateFlow(SenderUiState())
+    private val localBinder = LocalBinder()
     private val previewRenderers = CopyOnWriteArraySet<SurfaceViewRenderer>()
     private val pendingRemoteIce = mutableListOf<IceCandidate>()
     private var manualDisconnect = false
     private var reconnectJob: Job? = null
+    private var readyAnnouncementJob: Job? = null
+    private var offerTimeoutJob: Job? = null
+    private var postOfferConnectionTimeoutJob: Job? = null
+    private var hasReceivedHostOffer = false
+    private var hasLoggedInboundIce = false
+    private var hasLoggedOutboundIce = false
     private var activePairCode: String? = null
 
     private var powerWakeLock: PowerManager.WakeLock? = null
@@ -133,7 +140,8 @@ class CameraSenderService : Service() {
     }
 
     inner class LocalBinder : Binder() {
-        val uiState: StateFlow<SenderUiState> = _uiState.asStateFlow()
+        val uiState: StateFlow<SenderUiState>
+            get() = _uiState
 
         fun connect(pairCode: String) {
             serviceScope.launch {
@@ -203,6 +211,12 @@ class CameraSenderService : Service() {
 
     private suspend fun connect(pairCode: String) {
         if (BuildConfig.SUPABASE_URL.isBlank() || BuildConfig.SUPABASE_ANON_KEY.isBlank()) {
+            logConnectionReport(
+                stage = "config-missing",
+                detail = "Supabase configuration is missing for native sender startup.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
             updateState(
                 pairCode = pairCode,
                 statusText = "Native sender is missing Supabase config.",
@@ -214,10 +228,24 @@ class CameraSenderService : Service() {
         }
 
         manualDisconnect = false
+        hasReceivedHostOffer = false
+        hasLoggedInboundIce = false
+        hasLoggedOutboundIce = false
         activePairCode = pairCode
         reconnectJob?.cancel()
+        logConnectionReport(
+            stage = "connect-requested",
+            detail = "Connect requested from launcher UI.",
+            pairCode = pairCode
+        )
         initializePeerFactory()
         if (peerConnectionFactory == null || eglBase == null) {
+            logConnectionReport(
+                stage = "webrtc-init-failed",
+                detail = "WebRTC initialization did not complete.",
+                severity = "ERROR",
+                pairCode = pairCode
+            )
             updateState(
                 pairCode = pairCode,
                 statusText = "Native camera is unavailable on this device.",
@@ -253,14 +281,30 @@ class CameraSenderService : Service() {
                 onSignalMessage = ::handleSignalMessage,
                 onTransportFailure = { reason ->
                     if (manualDisconnect) return@NativePairSignalClient
+                    logConnectionReport(
+                        stage = "signal-transport-failure",
+                        detail = reason ?: "Signaling transport dropped.",
+                        severity = "WARN",
+                        pairCode = pairCode
+                    )
                     scheduleReconnect(reason ?: "Signaling dropped.")
                 }
             )
             signalClient = nextSignalClient
+            logConnectionReport(
+                stage = "signal-connecting",
+                detail = "Opening Supabase realtime channel for pairing.",
+                pairCode = pairCode
+            )
             withContext(Dispatchers.IO) {
                 nextSignalClient.connect()
             }
 
+            logConnectionReport(
+                stage = "waiting-host-offer",
+                detail = "Camera is ready and waiting for host offer.",
+                pairCode = pairCode
+            )
             updateState(
                 pairCode = pairCode,
                 statusText = "Native camera ready. Waiting for host offer…",
@@ -268,11 +312,15 @@ class CameraSenderService : Service() {
                 isStreaming = true,
                 errorText = null
             )
-            repeat(3) { attempt ->
-                nextSignalClient.send(PairSignalMessagePayload(type = "ready", from = "sender", ts = System.currentTimeMillis()))
-                if (attempt < 2) delay(1_200)
-            }
+            startReadyAnnouncements(nextSignalClient, pairCode)
+            startOfferTimeoutMonitor(pairCode)
         } catch (error: Throwable) {
+            logConnectionReport(
+                stage = "connect-failed",
+                detail = error.message ?: "Unknown startup failure.",
+                severity = "ERROR",
+                pairCode = pairCode
+            )
             updateState(
                 pairCode = pairCode,
                 statusText = "Native sender failed to start.",
@@ -327,6 +375,13 @@ class CameraSenderService : Service() {
             object : PeerConnection.Observer {
                 override fun onIceCandidate(candidate: IceCandidate) {
                     val currentSignalClient = signalClient ?: return
+                    if (!hasLoggedOutboundIce) {
+                        hasLoggedOutboundIce = true
+                        logConnectionReport(
+                            stage = "sender-ice-generated",
+                            detail = "Local ICE candidates are being generated and sent."
+                        )
+                    }
                     serviceScope.launch {
                         currentSignalClient.send(
                             PairSignalMessagePayload(
@@ -346,6 +401,12 @@ class CameraSenderService : Service() {
                 override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
                     when (newState) {
                         PeerConnection.PeerConnectionState.CONNECTED -> {
+                            postOfferConnectionTimeoutJob?.cancel()
+                            postOfferConnectionTimeoutJob = null
+                            logConnectionReport(
+                                stage = "peer-connected",
+                                detail = "WebRTC peer connection reached CONNECTED state."
+                            )
                             updateState(
                                 pairCode = activePairCode.orEmpty(),
                                 statusText = "Native stream live.",
@@ -391,41 +452,111 @@ class CameraSenderService : Service() {
         if (message.from != "host") return
         val rtcPeer = peerConnection ?: return
         val currentSignalClient = signalClient ?: return
+        val pairCode = activePairCode.orEmpty()
 
         when (message.type) {
             "offer" -> {
                 if (rtcPeer.signalingState() != PeerConnection.SignalingState.STABLE || rtcPeer.remoteDescription != null) {
                     return
                 }
-                val payload = message.payload as? JsonObject ?: return
-                val sdp = payload["sdp"]?.jsonPrimitive?.content ?: return
-                rtcPeer.setRemoteDescriptionAwait(SessionDescription(SessionDescription.Type.OFFER, sdp))
-                drainPendingIce(rtcPeer)
-                val answer = rtcPeer.createAnswerAwait()
-                rtcPeer.setLocalDescriptionAwait(answer)
-                currentSignalClient.send(
-                    PairSignalMessagePayload(
-                        type = "answer",
-                        from = "sender",
-                        ts = System.currentTimeMillis(),
-                        payload = buildJsonObject {
-                            put("type", answer.type.canonicalForm())
-                            put("sdp", answer.description)
-                        }
+                logConnectionReport(
+                    stage = "offer-received",
+                    detail = "Host offer received; preparing answer."
+                )
+                try {
+                    hasReceivedHostOffer = true
+                    readyAnnouncementJob?.cancel()
+                    readyAnnouncementJob = null
+                    offerTimeoutJob?.cancel()
+                    offerTimeoutJob = null
+                    val payload = message.payload as? JsonObject ?: return
+                    val sdp = payload["sdp"]?.jsonPrimitive?.content ?: return
+                    withTimeout(10_000) {
+                        rtcPeer.setRemoteDescriptionAwait(SessionDescription(SessionDescription.Type.OFFER, sdp))
+                    }
+                    logConnectionReport(
+                        stage = "remote-description-set",
+                        detail = "Remote host offer applied successfully.",
+                        pairCode = pairCode
                     )
-                )
-                updateState(
-                    pairCode = activePairCode.orEmpty(),
-                    statusText = "Answer sent. Finishing secure connection…",
-                    connectionState = SenderConnectionState.CONNECTING,
-                    isStreaming = true,
-                    errorText = null
-                )
+                    drainPendingIce(rtcPeer)
+                    val answer = withTimeout(10_000) {
+                        rtcPeer.createAnswerAwait()
+                    }
+                    logConnectionReport(
+                        stage = "answer-created",
+                        detail = "Local answer created; applying local description.",
+                        pairCode = pairCode
+                    )
+                    val localDescriptionApplied = runCatching {
+                        withTimeout(10_000) {
+                            rtcPeer.setLocalDescriptionAwait(answer)
+                        }
+                    }.isSuccess
+                    if (localDescriptionApplied) {
+                        logConnectionReport(
+                            stage = "local-description-set",
+                            detail = "Local answer applied successfully.",
+                            pairCode = pairCode
+                        )
+                    } else {
+                        logConnectionReport(
+                            stage = "local-description-timeout",
+                            detail = "setLocalDescription timed out; sending answer payload fallback.",
+                            severity = "WARN",
+                            pairCode = pairCode
+                        )
+                    }
+                    withTimeout(6_000) {
+                        currentSignalClient.send(
+                            PairSignalMessagePayload(
+                                type = "answer",
+                                from = "sender",
+                                ts = System.currentTimeMillis(),
+                                payload = buildJsonObject {
+                                    put("type", answer.type.canonicalForm())
+                                    put("sdp", answer.description)
+                                }
+                            )
+                        )
+                    }
+                    updateState(
+                        pairCode = pairCode,
+                        statusText = "Answer sent. Finishing secure connection…",
+                        connectionState = SenderConnectionState.CONNECTING,
+                        isStreaming = true,
+                        errorText = null
+                    )
+                    logConnectionReport(
+                        stage = "answer-sent",
+                        detail = "Local answer sent to host; waiting for ICE/connection completion.",
+                        pairCode = pairCode
+                    )
+                    startPostOfferConnectionTimeout(pairCode)
+                } catch (error: Throwable) {
+                    logConnectionReport(
+                        stage = "offer-handling-failed",
+                        detail = error.message ?: "Offer handling failed.",
+                        severity = "ERROR",
+                        pairCode = pairCode
+                    )
+                    if (!manualDisconnect) {
+                        scheduleReconnect("Offer handling failed.")
+                    }
+                }
             }
 
             "ice" -> {
                 val payload = message.payload as? JsonObject ?: return
                 val candidate = payload.toIceCandidate() ?: return
+                if (!hasLoggedInboundIce) {
+                    hasLoggedInboundIce = true
+                    logConnectionReport(
+                        stage = "host-ice-received",
+                        detail = "Host ICE candidates are being received.",
+                        pairCode = pairCode
+                    )
+                }
                 if (rtcPeer.remoteDescription != null) {
                     rtcPeer.addIceCandidate(candidate)
                 } else {
@@ -434,6 +565,11 @@ class CameraSenderService : Service() {
             }
 
             "stop" -> {
+                logConnectionReport(
+                    stage = "host-stop",
+                    detail = "Host requested sender stop.",
+                    severity = "WARN"
+                )
                 manualDisconnect = true
                 shutdownSession(notifyStop = false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -451,6 +587,12 @@ class CameraSenderService : Service() {
 
     private fun scheduleReconnect(reason: String) {
         val pairCode = activePairCode ?: return
+        logConnectionReport(
+            stage = "reconnect-scheduled",
+            detail = reason,
+            severity = "WARN",
+            pairCode = pairCode
+        )
         reconnectJob?.cancel()
         updateState(
             pairCode = pairCode,
@@ -470,6 +612,10 @@ class CameraSenderService : Service() {
     }
 
     private suspend fun disconnectAndStop() {
+        logConnectionReport(
+            stage = "manual-disconnect",
+            detail = "Sender disconnect requested from app UI."
+        )
         manualDisconnect = true
         activePairCode = null
         shutdownSession(notifyStop = true)
@@ -482,6 +628,15 @@ class CameraSenderService : Service() {
         clearPairCode: Boolean = true,
         stopForegroundSession: Boolean = false
     ) {
+        readyAnnouncementJob?.cancel()
+        readyAnnouncementJob = null
+        offerTimeoutJob?.cancel()
+        offerTimeoutJob = null
+        postOfferConnectionTimeoutJob?.cancel()
+        postOfferConnectionTimeoutJob = null
+        hasReceivedHostOffer = false
+        hasLoggedInboundIce = false
+        hasLoggedOutboundIce = false
         reconnectJob?.cancel()
         reconnectJob = null
 
@@ -503,10 +658,11 @@ class CameraSenderService : Service() {
         }
 
         pendingRemoteIce.clear()
-        videoSender?.dispose()
+        // PeerConnection owns sender lifecycle; disposing both causes double-dispose crashes.
         videoSender = null
-        peerConnection?.dispose()
+        val activePeerConnection = peerConnection
         peerConnection = null
+        runCatching { activePeerConnection?.dispose() }
 
         runCatching { videoCapturer?.stopCapture() }
         runCatching { videoCapturer?.dispose() }
@@ -664,6 +820,82 @@ class CameraSenderService : Service() {
 
     private fun updateNotification(contentText: String) {
         notificationManager?.notify(NOTIFICATION_ID, buildNotification(contentText))
+    }
+
+    private fun startReadyAnnouncements(signalClient: NativePairSignalClient, pairCode: String) {
+        readyAnnouncementJob?.cancel()
+        readyAnnouncementJob = serviceScope.launch {
+            var announceCount = 0
+            while (!manualDisconnect && !hasReceivedHostOffer && activePairCode == pairCode) {
+                signalClient.send(
+                    PairSignalMessagePayload(
+                        type = "ready",
+                        from = "sender",
+                        ts = System.currentTimeMillis()
+                    )
+                )
+                announceCount += 1
+                if (announceCount == 1) {
+                    logConnectionReport(
+                        stage = "ready-sent",
+                        detail = "Ready signal sent; waiting for host offer.",
+                        pairCode = pairCode
+                    )
+                }
+                delay(2_500)
+            }
+        }
+    }
+
+    private fun startOfferTimeoutMonitor(pairCode: String) {
+        offerTimeoutJob?.cancel()
+        offerTimeoutJob = serviceScope.launch {
+            delay(18_000)
+            if (!manualDisconnect && !hasReceivedHostOffer && activePairCode == pairCode) {
+                logConnectionReport(
+                    stage = "offer-timeout",
+                    detail = "No host offer received after waiting for signaling handshake.",
+                    severity = "WARN",
+                    pairCode = pairCode
+                )
+                updateState(
+                    pairCode = pairCode,
+                    statusText = "Waiting for host offer…",
+                    connectionState = SenderConnectionState.CONNECTING,
+                    isStreaming = true,
+                    errorText = "Still waiting for host offer. Confirm host broadcast pairing is active."
+                )
+            }
+        }
+    }
+
+    private fun startPostOfferConnectionTimeout(pairCode: String) {
+        postOfferConnectionTimeoutJob?.cancel()
+        postOfferConnectionTimeoutJob = serviceScope.launch {
+            delay(20_000)
+            if (!manualDisconnect && activePairCode == pairCode && _uiState.value.connectionState != SenderConnectionState.CONNECTED) {
+                logConnectionReport(
+                    stage = "post-offer-timeout",
+                    detail = "Offer/answer exchange happened, but peer connection did not reach CONNECTED.",
+                    severity = "WARN",
+                    pairCode = pairCode
+                )
+            }
+        }
+    }
+
+    private fun logConnectionReport(
+        stage: String,
+        detail: String,
+        severity: String = "INFO",
+        pairCode: String? = activePairCode
+    ) {
+        ApplicationReportHub.recordConnection(
+            pairCode = pairCode,
+            stage = stage,
+            detail = detail,
+            severity = severity
+        )
     }
 
     companion object {

@@ -7,7 +7,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -48,6 +47,23 @@ data class ApplicationCrashReport(
     @SerialName("upload_status") val uploadStatus: String = "pending"
 )
 
+object ApplicationReportHub {
+    @Volatile
+    private var manager: CrashReportManager? = null
+
+    fun initialize(nextManager: CrashReportManager) {
+        manager = nextManager
+    }
+
+    fun recordCrash(threadName: String, throwable: Throwable) {
+        manager?.recordCrash(threadName, throwable)
+    }
+
+    fun recordConnection(pairCode: String?, stage: String, detail: String, severity: String = "INFO") {
+        manager?.recordConnectionEvent(pairCode, stage, detail, severity)
+    }
+}
+
 class TdiabApplication : Application() {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var crashReportManager: CrashReportManager
@@ -56,9 +72,10 @@ class TdiabApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         crashReportManager = CrashReportManager(this, applicationScope)
+        ApplicationReportHub.initialize(crashReportManager)
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching {
-                crashReportManager.recordCrash(thread.name, throwable)
+                ApplicationReportHub.recordCrash(thread.name, throwable)
             }
             previousHandler?.uncaughtException(thread, throwable) ?: run {
                 android.os.Process.killProcess(android.os.Process.myPid())
@@ -69,7 +86,7 @@ class TdiabApplication : Application() {
     }
 }
 
-private class CrashReportManager(
+class CrashReportManager(
     context: Context,
     private val scope: CoroutineScope
 ) {
@@ -78,10 +95,12 @@ private class CrashReportManager(
 
     fun recordCrash(threadName: String, throwable: Throwable) {
         val report = buildReport(threadName, throwable)
-        store.writePending(report)
-        scope.launch {
-            transport.syncPendingReports(store)
-        }
+        persistAndSync(report)
+    }
+
+    fun recordConnectionEvent(pairCode: String?, stage: String, detail: String, severity: String = "INFO") {
+        val report = buildConnectionReport(pairCode, stage, detail, severity)
+        persistAndSync(report)
     }
 
     fun syncPendingReports() {
@@ -119,6 +138,49 @@ private class CrashReportManager(
             sdkInt = Build.VERSION.SDK_INT,
             filePath = filePath
         )
+    }
+
+    private fun buildConnectionReport(
+        pairCode: String?,
+        stage: String,
+        detail: String,
+        severity: String
+    ): ApplicationCrashReport {
+        val createdAt = synchronized(ISO_FORMAT) {
+            ISO_FORMAT.format(java.util.Date())
+        }
+        val reportId = crashReportId(createdAt)
+        val filePath = store.pendingFileFor(reportId = reportId).absolutePath
+        val normalizedPairCode = pairCode?.ifBlank { "unknown" } ?: "unknown"
+        return ApplicationCrashReport(
+            id = reportId,
+            occurredAt = createdAt,
+            source = "android-connection",
+            severity = severity.uppercase(Locale.US),
+            title = "Connection event: $stage",
+            summary = detail,
+            exceptionClass = "ConnectionEvent",
+            message = detail,
+            stackTrace = "stage=$stage; pairCode=$normalizedPairCode; detail=$detail",
+            threadName = Thread.currentThread().name,
+            packageName = BuildConfig.APPLICATION_ID,
+            appName = "TD in a Box",
+            versionName = BuildConfig.VERSION_NAME,
+            versionCode = BuildConfig.VERSION_CODE,
+            buildType = BuildConfig.BUILD_TYPE,
+            deviceModel = Build.MODEL.orEmpty(),
+            deviceManufacturer = Build.MANUFACTURER.orEmpty(),
+            androidVersion = Build.VERSION.RELEASE.orEmpty(),
+            sdkInt = Build.VERSION.SDK_INT,
+            filePath = filePath
+        )
+    }
+
+    private fun persistAndSync(report: ApplicationCrashReport) {
+        store.writePending(report)
+        scope.launch {
+            transport.syncPendingReports(store)
+        }
     }
 }
 

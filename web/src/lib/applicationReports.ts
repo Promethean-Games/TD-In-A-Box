@@ -62,7 +62,8 @@ export async function listApplicationReports(): Promise<ApplicationReport[]> {
       .limit(100);
 
     if (error) {
-      throw error;
+      const detailSuffix = error.details ? ` (${error.details})` : '';
+      throw new Error(`Supabase reports query failed: ${error.message}${detailSuffix}`);
     }
 
     return (data ?? []).map((report) => normalizeReport(report as Record<string, unknown>));
@@ -91,4 +92,36 @@ export function persistApplicationReports(reports: ApplicationReport[]): void {
   }
 
   window.localStorage.setItem(APPLICATION_REPORTS_KEY, JSON.stringify(reports));
+}
+
+export async function createApplicationReport(
+  report: Partial<ApplicationReport> & Record<string, unknown>
+): Promise<void> {
+  const normalized = normalizeReport(report);
+
+  if (isSupabaseConfigured && supabase) {
+    const { error } = await supabase
+      .from('application_reports')
+      .insert([normalized]);
+
+    if (!error) {
+      return;
+    }
+  }
+
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const raw = window.localStorage.getItem(APPLICATION_REPORTS_KEY);
+  const existing = (() => {
+    if (!raw) return [] as ApplicationReport[];
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>[];
+      return Array.isArray(parsed) ? parsed.map((entry) => normalizeReport(entry)) : [];
+    } catch {
+      return [] as ApplicationReport[];
+    }
+  })();
+  persistApplicationReports([normalized, ...existing].slice(0, 200));
 }

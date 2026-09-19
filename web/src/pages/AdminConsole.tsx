@@ -28,6 +28,7 @@ import { listApplicationReports, type ApplicationReport } from '@/lib/applicatio
 import './AdminConsole.css';
 
 type AdminSectionId = 'overview' | 'people' | 'venues' | 'tdtv' | 'events' | 'application' | 'billing' | 'system';
+type ApplicationReportCategory = 'crash' | 'connection';
 
 const overviewMetrics = [
   {
@@ -122,13 +123,30 @@ const adminSections = [
   { id: 'system', label: 'System' }
 ] as const;
 
-const nestedAdminNavigation = {
-  People: ['Users', 'TDs', 'Venues', 'Players'],
-  Tournaments: ['All Tournaments', 'My Tournaments', 'Live Now', 'Recent'],
-  Application: ['Reports'],
-  TDTV: ['Network', 'Channels', 'Live Broadcasts'],
-  Billing: ['Subscriptions', 'Entitlements'],
-  System: ['Activity / Audit Log', 'System Health', 'Settings']
+const nestedAdminNavigation: Partial<Record<AdminSectionId, readonly string[]>> = {
+  people: ['Users', 'TDs', 'Venues', 'Players'],
+  events: ['All Tournaments', 'My Tournaments', 'Live Now', 'Recent'],
+  application: ['Reports'],
+  tdtv: ['Network', 'Channels', 'Live Broadcasts'],
+  billing: ['Subscriptions', 'Entitlements'],
+  system: ['Activity / Audit Log', 'System Health', 'Settings']
+} as const;
+
+const submenuRouteMap: Partial<Record<AdminSectionId, Partial<Record<string, string>>>> = {
+  events: {
+    'All Tournaments': '/tournaments',
+    'My Tournaments': '/tournaments',
+    'Live Now': '/tournaments',
+    'Recent': '/tournaments'
+  },
+  tdtv: {
+    Channels: '/tv-guide',
+    'Live Broadcasts': '/tv-guide'
+  },
+  billing: {
+    Subscriptions: '/account?section=billing',
+    Entitlements: '/account?section=billing'
+  }
 } as const;
 
 const defaultOverviewMetrics = overviewMetrics.map((metric) => metric.id);
@@ -163,6 +181,8 @@ export default function AdminConsole() {
   const navigate = useNavigate();
   const { tournaments } = useTournamentStore();
   const [activeSection, setActiveSection] = useState<AdminSectionId>('overview');
+  const [expandedNavSection, setExpandedNavSection] = useState<AdminSectionId | null>(null);
+  const [activeSubnavItem, setActiveSubnavItem] = useState<string | null>(null);
   const [showMetricMenu, setShowMetricMenu] = useState(false);
   const [visibleOverviewMetrics, setVisibleOverviewMetrics] = useState<string[]>(defaultOverviewMetrics);
   const [allChannels, setAllChannels] = useState(() => getChannelRegistry());
@@ -171,6 +191,7 @@ export default function AdminConsole() {
   const [sponsorshipStatus, setSponsorshipStatus] = useState<string>('');
   const [applicationReports, setApplicationReports] = useState<ApplicationReport[]>([]);
   const [applicationReportsStatus, setApplicationReportsStatus] = useState<string>('');
+  const [applicationReportFilter, setApplicationReportFilter] = useState<'all' | ApplicationReportCategory>('all');
   const [search, setSearch] = useState('');
   const [selectedEntity, setSelectedEntity] = useState<AdminEntityRecord | null>(null);
   const [selectedEntityTab, setSelectedEntityTab] = useState<'overview' | 'activity' | 'history' | 'related'>('overview');
@@ -210,6 +231,29 @@ export default function AdminConsole() {
   useEffect(() => {
     void refreshApplicationReports();
   }, []);
+
+  const categorizeApplicationReport = (report: ApplicationReport): ApplicationReportCategory => {
+    const source = report.source.toLowerCase();
+    if (source.includes('connection') || report.exception_class === 'ConnectionEvent') {
+      return 'connection';
+    }
+    return 'crash';
+  };
+
+  const crashReports = useMemo(
+    () => applicationReports.filter((report) => categorizeApplicationReport(report) === 'crash'),
+    [applicationReports]
+  );
+  const connectionReports = useMemo(
+    () => applicationReports.filter((report) => categorizeApplicationReport(report) === 'connection'),
+    [applicationReports]
+  );
+  const filteredApplicationReports = useMemo(() => {
+    if (applicationReportFilter === 'all') {
+      return applicationReports;
+    }
+    return applicationReports.filter((report) => categorizeApplicationReport(report) === applicationReportFilter);
+  }, [applicationReportFilter, applicationReports]);
 
   const sectionData = useMemo(() => {
     const baseCards = [
@@ -257,17 +301,16 @@ export default function AdminConsole() {
         ];
       case 'application': {
         const latestReport = applicationReports[0];
-        const fatalCount = applicationReports.filter((report) => report.severity === 'FATAL').length;
         return [
-          { title: 'Crash reports', value: String(applicationReports.length), detail: 'Stored application reports' },
-          { title: 'Fatal issues', value: String(fatalCount), detail: 'Uncaught exceptions' },
+          { title: 'Crash reports', value: String(crashReports.length), detail: 'Unhandled exception reports' },
+          { title: 'Connection reports', value: String(connectionReports.length), detail: 'Linking and signal diagnostics' },
           { title: 'Latest report', value: latestReport ? latestReport.app_name : 'None', detail: latestReport ? latestReport.summary : 'Waiting for the first crash report' }
         ];
       }
       default:
         return [];
     }
-  }, [activeSection, allChannels, applicationReports, currentUser, permissions, systemSponsorDefaults, tournaments]);
+  }, [activeSection, allChannels, applicationReports, crashReports.length, connectionReports.length, currentUser, permissions, systemSponsorDefaults, tournaments]);
 
   const networkEntityDirectory = useMemo(() => {
     const people = [
@@ -486,6 +529,32 @@ export default function AdminConsole() {
     if (entity.group === 'tdtv') setActiveSection('tdtv');
     else if (entity.group === 'events') setActiveSection('events');
     else setActiveSection('people');
+    setExpandedNavSection(entity.group === 'tdtv' ? 'tdtv' : entity.group === 'events' ? 'events' : 'people');
+    setActiveSubnavItem(null);
+  };
+
+  const handleSectionSelect = (sectionId: AdminSectionId) => {
+    const hasSubnav = (nestedAdminNavigation[sectionId]?.length ?? 0) > 0;
+    setActiveSection(sectionId);
+    setActiveSubnavItem(null);
+    if (!hasSubnav) {
+      setExpandedNavSection(null);
+      return;
+    }
+    setExpandedNavSection((current) => (current === sectionId ? null : sectionId));
+  };
+
+  const handleSubnavSelect = (sectionId: AdminSectionId, item: string) => {
+    const routeTarget = submenuRouteMap[sectionId]?.[item];
+    const targetSection: AdminSectionId = sectionId === 'people' && item === 'Venues' ? 'venues' : sectionId;
+
+    setActiveSection(targetSection);
+    setExpandedNavSection(sectionId);
+    setActiveSubnavItem(`${sectionId}:${item}`);
+
+    if (routeTarget) {
+      navigate(routeTarget);
+    }
   };
 
   return (
@@ -502,41 +571,40 @@ export default function AdminConsole() {
         </div>
 
         <nav className="admin-console__nav" aria-label="Admin navigation">
-          {adminSections.map((section) => (
-            <div key={section.id} className="admin-nav-group">
-              <button
-                type="button"
-                className={`admin-nav-item ${activeSection === section.id ? 'is-active' : ''}`}
-                onClick={() => setActiveSection(section.id)}
-              >
-                {section.label}
-              </button>
-              {section.id === 'people' || section.id === 'events' || section.id === 'application' || section.id === 'tdtv' || section.id === 'billing' || section.id === 'system' ? (
-                <div className="admin-subnav">
-                  {nestedAdminNavigation[section.label as keyof typeof nestedAdminNavigation].map((item) => (
-                    <button
-                      key={`${section.id}-${item}`}
-                      type="button"
-                      className="admin-subnav-item"
-                      onClick={() => {
-                        if (item === 'My Tournaments') {
-                          navigate('/tournaments');
-                          return;
-                        }
-                        if (section.id === 'application' && item === 'Reports') {
-                          setActiveSection('application');
-                          return;
-                        }
-                        setActiveSection(section.id);
-                      }}
-                    >
-                      {item}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ))}
+          {adminSections.map((section) => {
+            const sectionSubnavItems = nestedAdminNavigation[section.id] ?? [];
+            const isSubnavOpen = expandedNavSection === section.id;
+
+            return (
+              <div key={section.id} className="admin-nav-group">
+                <button
+                  type="button"
+                  className={`admin-nav-item ${activeSection === section.id ? 'is-active' : ''}`}
+                  onClick={() => handleSectionSelect(section.id)}
+                  aria-expanded={sectionSubnavItems.length > 0 ? isSubnavOpen : undefined}
+                >
+                  <span className="admin-nav-item__label">{section.label}</span>
+                  {sectionSubnavItems.length > 0 ? (
+                    <span className={`admin-nav-item__chevron ${isSubnavOpen ? 'is-open' : ''}`} aria-hidden="true">▾</span>
+                  ) : null}
+                </button>
+                {sectionSubnavItems.length > 0 && isSubnavOpen ? (
+                  <div className="admin-subnav">
+                    {sectionSubnavItems.map((item) => (
+                      <button
+                        key={`${section.id}-${item}`}
+                        type="button"
+                        className={`admin-subnav-item ${activeSubnavItem === `${section.id}:${item}` ? 'is-active' : ''}`}
+                        onClick={() => handleSubnavSelect(section.id, item)}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </nav>
 
         <div className="sidebar-stats">
@@ -877,6 +945,30 @@ export default function AdminConsole() {
 
               {applicationReportsStatus ? <p className="admin-application-status">{applicationReportsStatus}</p> : null}
 
+              <div className="admin-application-filters" role="tablist" aria-label="Application report type">
+                <button
+                  type="button"
+                  className={`filter-pill ${applicationReportFilter === 'all' ? 'is-selected' : ''}`}
+                  onClick={() => setApplicationReportFilter('all')}
+                >
+                  All reports
+                </button>
+                <button
+                  type="button"
+                  className={`filter-pill ${applicationReportFilter === 'crash' ? 'is-selected' : ''}`}
+                  onClick={() => setApplicationReportFilter('crash')}
+                >
+                  Crash reports
+                </button>
+                <button
+                  type="button"
+                  className={`filter-pill ${applicationReportFilter === 'connection' ? 'is-selected' : ''}`}
+                  onClick={() => setApplicationReportFilter('connection')}
+                >
+                  Connection reports
+                </button>
+              </div>
+
               <div className="admin-panel-grid">
                 {sectionData.map((item) => (
                   <article key={`${activeSection}-${item.title}`} className="admin-panel-card">
@@ -887,14 +979,14 @@ export default function AdminConsole() {
                 ))}
               </div>
 
-              {applicationReports.length === 0 ? (
+              {filteredApplicationReports.length === 0 ? (
                 <div className="admin-empty-state">
-                  <h3>No crash reports yet</h3>
-                  <p>When the Android app captures an uncaught exception, the report will appear here after the next sync.</p>
+                  <h3>No {applicationReportFilter === 'all' ? '' : `${applicationReportFilter} `}reports yet</h3>
+                  <p>When the Android app captures an uncaught exception or a connection lifecycle event, reports will appear here after sync.</p>
                 </div>
               ) : (
                 <div className="admin-application-list">
-                  {applicationReports.map((report) => (
+                  {filteredApplicationReports.map((report) => (
                     <article key={report.id} className="admin-application-report">
                       <div className="admin-application-report__head">
                         <div>
@@ -904,6 +996,7 @@ export default function AdminConsole() {
                         <small>{new Date(report.occurred_at).toLocaleString()}</small>
                       </div>
                       <div className="admin-application-report__body">
+                        <span>{categorizeApplicationReport(report) === 'connection' ? 'Connection report' : 'Crash report'}</span>
                         <span>{report.app_name} • {report.version_name} ({report.build_type})</span>
                         <span>{report.device_manufacturer} {report.device_model}</span>
                         <span>{report.android_version} • API {report.sdk_int}</span>
@@ -1012,6 +1105,49 @@ export default function AdminConsole() {
                 </div>
               </section>
             )
+          ) : activeSection === 'venues' ? (
+            <section className="venue-request-admin-panel">
+              <h3>Venue channel change requests</h3>
+              {venueChannelRequests.length === 0 ? (
+                <p>No venue channel requests submitted yet.</p>
+              ) : (
+                <div className="venue-request-admin-list">
+                  {venueChannelRequests.map((request) => (
+                    <article key={request.id} className="venue-request-admin-row">
+                      <div>
+                        <strong>{request.venueName}</strong>
+                        <small>
+                          Requested VENUE-{String(request.requestedChannelNumber).padStart(3, '0')} - {request.requestedChannelName}
+                        </small>
+                      </div>
+                      <div className="venue-request-admin-status">{request.status}</div>
+                      {request.status === 'PENDING' ? (
+                        <div className="venue-request-admin-actions">
+                          <button
+                            type="button"
+                            className="ghost-btn ghost-btn--small"
+                            onClick={() => handleVenueChannelDecision(request.id, 'APPROVED')}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-btn ghost-btn--small"
+                            onClick={() => handleVenueChannelDecision(request.id, 'DENIED')}
+                          >
+                            Deny
+                          </button>
+                        </div>
+                      ) : (
+                        <small className="venue-request-admin-reviewed">
+                          {request.reviewedBy ? `Reviewed by ${request.reviewedBy}` : 'Resolved'}
+                        </small>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
           ) : sectionData.length === 0 ? (
             <div className="admin-empty-state">
               <h3>No data available</h3>
@@ -1028,50 +1164,6 @@ export default function AdminConsole() {
                   </article>
                 ))}
               </div>
-              {activeSection === 'venues' && (
-                <section className="venue-request-admin-panel">
-                  <h3>Venue channel change requests</h3>
-                  {venueChannelRequests.length === 0 ? (
-                    <p>No venue channel requests submitted yet.</p>
-                  ) : (
-                    <div className="venue-request-admin-list">
-                      {venueChannelRequests.map((request) => (
-                        <article key={request.id} className="venue-request-admin-row">
-                          <div>
-                            <strong>{request.venueName}</strong>
-                            <small>
-                              Requested VENUE-{String(request.requestedChannelNumber).padStart(3, '0')} - {request.requestedChannelName}
-                            </small>
-                          </div>
-                          <div className="venue-request-admin-status">{request.status}</div>
-                          {request.status === 'PENDING' ? (
-                            <div className="venue-request-admin-actions">
-                              <button
-                                type="button"
-                                className="ghost-btn ghost-btn--small"
-                                onClick={() => handleVenueChannelDecision(request.id, 'APPROVED')}
-                              >
-                                Approve
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost-btn ghost-btn--small"
-                                onClick={() => handleVenueChannelDecision(request.id, 'DENIED')}
-                              >
-                                Deny
-                              </button>
-                            </div>
-                          ) : (
-                            <small className="venue-request-admin-reviewed">
-                              {request.reviewedBy ? `Reviewed by ${request.reviewedBy}` : 'Resolved'}
-                            </small>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              )}
             </>
           )}
         </div>

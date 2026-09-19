@@ -110,11 +110,35 @@
   color: rgba(237, 244, 255, 0.76);
 }
 
+.admin-subnav-item.is-active,
+.admin-subnav-item:hover {
+  border-color: rgba(119, 195, 255, 0.35);
+  background: rgba(61, 151, 231, 0.12);
+  color: #e9f4ff;
+}
+
 .admin-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   text-align: left;
   font-weight: 700;
   padding: 0.72rem 0.86rem;
   transition: all 0.2s ease;
+}
+
+.admin-nav-item__label {
+  min-width: 0;
+}
+
+.admin-nav-item__chevron {
+  font-size: 0.72rem;
+  color: rgba(237, 244, 255, 0.72);
+  transition: transform 0.2s ease;
+}
+
+.admin-nav-item__chevron.is-open {
+  transform: rotate(180deg);
 }
 
 .admin-nav-item.is-active,
@@ -1040,6 +1064,12 @@
   margin: 0;
   color: #8cf6c2;
   font-size: 0.8rem;
+}
+
+.admin-application-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .admin-application-list {

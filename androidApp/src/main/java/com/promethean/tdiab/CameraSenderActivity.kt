@@ -99,8 +99,14 @@ class CameraSenderActivity : ComponentActivity() {
             senderBinder = binder
             isServiceBound = true
             binderCollectionJob?.cancel()
+            val stateFlow = runCatching { binder.uiState }.getOrNull()
+            if (stateFlow == null) {
+                localStatusText = "Camera service state unavailable"
+                localErrorText = "Unable to subscribe to camera service state."
+                return
+            }
             binderCollectionJob = lifecycleScope.launch {
-                binder.uiState.collect { nextState ->
+                stateFlow.collect { nextState ->
                     serviceUiState = nextState
                     if (nextState.errorText != null) {
                         localErrorText = nextState.errorText

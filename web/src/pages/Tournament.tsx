@@ -71,6 +71,7 @@ import { createHostChannelRelay, type HostChannelRelay } from '@/lib/liveRelay';
 import { getAppRouteUrl } from '@/lib/appPaths';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getPairingAvailabilityError } from '@/lib/webrtcPairing';
+import { createApplicationReport } from '@/lib/applicationReports';
 import './Tournament.css';
 
 const SEEDING_OPTIONS: { value: TournamentSeedMode; label: string }[] = [
@@ -198,6 +199,9 @@ export default function Tournament() {
   const activeCameraStreamRef = useRef<MediaStream | null>(null);
   const pairSignalClientRef = useRef<PairSignalClient | null>(null);
   const pairPeerRef = useRef<RTCPeerConnection | null>(null);
+  const offerInFlightRef = useRef(false);
+  const hostIceSentLoggedRef = useRef(false);
+  const senderIceReceivedLoggedRef = useRef(false);
   const liveRelayRef = useRef<HostChannelRelay | null>(null);
   const pendingIncomingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const matchCarouselTrackRef = useRef<HTMLDivElement | null>(null);
@@ -206,6 +210,35 @@ export default function Tournament() {
   const cameraPairUrl = cameraPairCode ? getAppRouteUrl(`/camera-link/${cameraPairCode}`) : '';
   const pairDiagnostics = useMemo(
     () => getPairSignalDiagnostics(cameraPairCode || 'pending'),
+    [cameraPairCode]
+  );
+
+  const reportHostConnectionEvent = useCallback(
+    (stage: string, detail: string, severity: 'INFO' | 'WARN' | 'ERROR' | 'FATAL' = 'INFO', pairCodeOverride?: string) => {
+      const pairCode = pairCodeOverride ?? cameraPairCode ?? 'pending';
+      void createApplicationReport({
+        occurred_at: new Date().toISOString(),
+        source: 'web-host-connection',
+        severity,
+        title: `Host connection event: ${stage}`,
+        summary: detail,
+        exception_class: 'HostConnectionEvent',
+        message: detail,
+        stack_trace: `stage=${stage}; pairCode=${pairCode}; detail=${detail}`,
+        thread_name: 'main',
+        package_name: 'web.tdiab.host',
+        app_name: 'TD in a Box Host',
+        version_name: '1.0',
+        version_code: 1,
+        build_type: import.meta.env.MODE || 'web',
+        device_model: navigator.userAgent,
+        device_manufacturer: navigator.platform,
+        android_version: 'n/a',
+        sdk_int: 0,
+        file_path: `host:${pairCode}`,
+        upload_status: 'synced'
+      });
+    },
     [cameraPairCode]
   );
 
@@ -1346,6 +1379,9 @@ export default function Tournament() {
     }
     signalClient?.close();
     pairSignalClientRef.current = null;
+    offerInFlightRef.current = false;
+    hostIceSentLoggedRef.current = false;
+    senderIceReceivedLoggedRef.current = false;
 
     const pairPeer = pairPeerRef.current;
     if (pairPeer) {
@@ -1375,22 +1411,45 @@ export default function Tournament() {
 
     try {
       if (message.type === 'ready') {
+        reportHostConnectionEvent('sender-ready-received', 'Sender ready signal received by host.');
+        if (peer.localDescription?.type === 'offer' && peer.signalingState === 'have-local-offer') {
+          await signalClient.send({
+            type: 'offer',
+            from: 'host',
+            payload: peer.localDescription.toJSON(),
+            ts: Date.now()
+          });
+          reportHostConnectionEvent('offer-resent', 'Re-sent existing local offer after sender ready.');
+          return;
+        }
+        if (offerInFlightRef.current) {
+          reportHostConnectionEvent('offer-skip-inflight', 'Skipped creating a second offer while one is already in-flight.', 'WARN');
+          return;
+        }
+        offerInFlightRef.current = true;
         setCameraPairStatus('Phone ready. Building secure connection...');
+        reportHostConnectionEvent('offer-creating', 'Host is creating offer for sender.');
         const offer = await peer.createOffer({
           offerToReceiveAudio: false,
           offerToReceiveVideo: true
         });
         await peer.setLocalDescription(offer);
+        reportHostConnectionEvent('offer-local-description-set', 'Host local offer description set.');
         await signalClient.send({ type: 'offer', from: 'host', payload: offer, ts: Date.now() });
+        reportHostConnectionEvent('offer-sent', 'Host offer sent to sender.');
+        offerInFlightRef.current = false;
         return;
       }
       if (message.type === 'answer' && message.payload) {
+        reportHostConnectionEvent('answer-received', 'Host received answer from sender.');
         const answer = message.payload as RTCSessionDescriptionInit;
         if (peer.signalingState === 'stable' && peer.remoteDescription) {
           setCameraPairStatus('Remote camera linked.');
+          reportHostConnectionEvent('answer-ignored-stable', 'Received answer while already stable; treating link as connected.');
           return;
         }
         await peer.setRemoteDescription(new RTCSessionDescription(answer));
+        reportHostConnectionEvent('answer-remote-description-set', 'Host applied remote answer description.');
         for (const candidate of pendingIncomingIceCandidatesRef.current) {
           try {
             await peer.addIceCandidate(new RTCIceCandidate(candidate));
@@ -1401,9 +1460,14 @@ export default function Tournament() {
         pendingIncomingIceCandidatesRef.current = [];
         setCameraConnectionState('CONNECTED');
         setCameraPairStatus('Remote camera linked.');
+        reportHostConnectionEvent('host-linked', 'Host marked connection as linked after answer.');
         return;
       }
       if (message.type === 'ice' && message.payload) {
+        if (!senderIceReceivedLoggedRef.current) {
+          senderIceReceivedLoggedRef.current = true;
+          reportHostConnectionEvent('sender-ice-received', 'Host received ICE candidate(s) from sender.');
+        }
         const candidate = message.payload as RTCIceCandidateInit;
         if (peer.remoteDescription) {
           try {
@@ -1417,12 +1481,19 @@ export default function Tournament() {
         return;
       }
       if (message.type === 'stop') {
+        reportHostConnectionEvent('sender-stop', 'Sender requested stop.');
         await stopPairingSession(false);
         stopActiveCameraStream();
         setCameraConnectionState('DISCONNECTED');
         setCameraStatusNote('Remote camera disconnected.');
       }
     } catch (error) {
+      offerInFlightRef.current = false;
+      reportHostConnectionEvent(
+        'host-signal-processing-failed',
+        error instanceof Error ? error.message : 'Failed to process remote camera signal.',
+        'ERROR'
+      );
       setCameraError(error instanceof Error ? error.message : 'Failed to process remote camera signal.');
     }
   };
@@ -1451,15 +1522,20 @@ export default function Tournament() {
 
     setIsRemotePairConnecting(true);
     setCameraError(null);
+    reportHostConnectionEvent('pairing-start-requested', 'Host pairing start requested.');
 
     try {
       stopActiveCameraStream();
       await stopPairingSession(false);
 
       const nextPairCode = generatePairCode();
+      hostIceSentLoggedRef.current = false;
+      senderIceReceivedLoggedRef.current = false;
+      reportHostConnectionEvent('pair-code-generated', 'Host generated new pair code.', 'INFO', nextPairCode);
       const signalClient = await createPairSignalClient(nextPairCode, handleIncomingPairSignal);
       pairSignalClientRef.current = signalClient;
       setSignalTransport(signalClient.transport);
+      reportHostConnectionEvent('signal-client-ready', `Signal client ready using ${signalClient.transport}.`, 'INFO', nextPairCode);
 
       const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
       pairPeerRef.current = peer;
@@ -1476,6 +1552,7 @@ export default function Tournament() {
         markCameraConnected('remote-phone');
         openTableAssignmentPrompt('remote-phone');
         setCameraStatusNote('QR-paired phone camera connected.');
+        reportHostConnectionEvent('host-ontrack', 'Host received remote media track and activated preview.', 'INFO', nextPairCode);
       };
       peer.onicecandidate = (event) => {
         if (!event.candidate || !pairSignalClientRef.current) return;
@@ -1485,28 +1562,48 @@ export default function Tournament() {
           payload: event.candidate.toJSON(),
           ts: Date.now()
         });
+        if (!hostIceSentLoggedRef.current) {
+          hostIceSentLoggedRef.current = true;
+          reportHostConnectionEvent('host-ice-sent', 'Host sent ICE candidate(s) to sender.', 'INFO', nextPairCode);
+        }
       };
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === 'connected') {
           setCameraPairStatus('Paired and streaming.');
           setCameraConnectionState('CONNECTED');
           setCameraStatusNote('Remote camera connected and streaming.');
+          offerInFlightRef.current = false;
+          reportHostConnectionEvent('host-peer-connected', 'Host WebRTC peer reached connected state.', 'INFO', nextPairCode);
         } else if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
           setCameraPairStatus(`Pairing ${peer.connectionState}.`);
           setCameraConnectionState('DISCONNECTED');
           setCameraStatusNote('Remote camera connection stalled. Try reconnecting.');
+          offerInFlightRef.current = false;
+          reportHostConnectionEvent(
+            'host-peer-stalled',
+            `Host peer connection state is ${peer.connectionState}.`,
+            'WARN',
+            nextPairCode
+          );
         }
       };
 
       setCameraPairCode(nextPairCode);
       setCameraPairStatus('Waiting for phone to scan the QR code...');
       setCameraStatusNote('QR code ready for phone camera pairing.');
+      reportHostConnectionEvent('host-waiting-sender', 'Host is waiting for sender ready signal.', 'INFO', nextPairCode);
       setCameraSourceId('remote-phone');
       updateBroadcastConfig((current) => ({
         ...current,
         cameraId: 'remote-phone'
       }));
     } catch (error) {
+      offerInFlightRef.current = false;
+      reportHostConnectionEvent(
+        'host-pairing-start-failed',
+        error instanceof Error ? error.message : 'Unable to start remote pairing session.',
+        'ERROR'
+      );
       setCameraError(error instanceof Error ? error.message : 'Unable to start remote pairing session.');
     } finally {
       setIsRemotePairConnecting(false);
