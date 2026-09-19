@@ -203,6 +203,7 @@ export default function Tournament() {
   const activeHostSessionIdRef = useRef<string>('');
   const activeSenderSessionIdRef = useRef<string>('');
   const offerInFlightRef = useRef(false);
+  const offerTimeoutRef = useRef<number | null>(null);
   const hostIceSentLoggedRef = useRef(false);
   const senderIceReceivedLoggedRef = useRef(false);
   const liveRelayRef = useRef<HostChannelRelay | null>(null);
@@ -1372,6 +1373,10 @@ export default function Tournament() {
   };
 
   const stopPairingSession = async (notifySender = true) => {
+    if (offerTimeoutRef.current !== null) {
+      window.clearTimeout(offerTimeoutRef.current);
+      offerTimeoutRef.current = null;
+    }
     const signalClient = pairSignalClientRef.current;
     if (notifySender && signalClient) {
       try {
@@ -1480,6 +1485,26 @@ export default function Tournament() {
     }));
   }
 
+  const armOfferTimeout = useCallback((pairCode: string) => {
+    if (offerTimeoutRef.current !== null) {
+      window.clearTimeout(offerTimeoutRef.current);
+    }
+    offerTimeoutRef.current = window.setTimeout(async () => {
+      const activePeer = pairPeerRef.current;
+      if (!activePeer || activePeer.connectionState === 'connected' || activePeer.remoteDescription) {
+        return;
+      }
+      reportHostConnectionEvent(
+        'host-offer-timeout',
+        'No answer received for the active offer within 15 seconds; resetting the pairing session.',
+        'WARN',
+        pairCode
+      );
+      await stopPairingSession(false);
+      await prepareHostPairingSession(pairCode);
+    }, 15000);
+  }, []);
+
   const handleIncomingPairSignal = async (message: PairSignalMessage) => {
     console.debug('[tdtv-host] signal message received', message, {
       hasPeer: Boolean(pairPeerRef.current),
@@ -1528,6 +1553,7 @@ export default function Tournament() {
             sessionId: activeHostSessionIdRef.current
           });
           reportHostConnectionEvent('offer-resent', 'Re-sent existing local offer after sender ready.');
+          armOfferTimeout(cameraPairCode || 'pending');
           return;
         }
         if (offerInFlightRef.current) {
@@ -1545,10 +1571,20 @@ export default function Tournament() {
         reportHostConnectionEvent('offer-local-description-set', 'Host local offer description set.');
         await signalClient.send({ type: 'offer', from: 'host', payload: offer, ts: Date.now(), sessionId: activeHostSessionIdRef.current });
         reportHostConnectionEvent('offer-sent', 'Host offer sent to sender.');
+        armOfferTimeout(cameraPairCode || 'pending');
         offerInFlightRef.current = false;
         return;
       }
       if (message.type === 'answer' && message.payload) {
+        if (message.sessionId && activeSenderSessionIdRef.current && message.sessionId !== activeSenderSessionIdRef.current) {
+          reportHostConnectionEvent(
+            'answer-session-stale',
+            `Ignoring stale sender answer for ${message.sessionId}. Active sender session is ${activeSenderSessionIdRef.current}.`,
+            'WARN',
+            cameraPairCode || 'pending'
+          );
+          return;
+        }
         reportHostConnectionEvent('answer-received', 'Host received answer from sender.');
         if (message.sessionId) {
           activeSenderSessionIdRef.current = message.sessionId;
@@ -1558,6 +1594,10 @@ export default function Tournament() {
           setCameraPairStatus('Remote camera linked.');
           reportHostConnectionEvent('answer-ignored-stable', 'Received answer while already stable; treating link as connected.');
           return;
+        }
+        if (offerTimeoutRef.current !== null) {
+          window.clearTimeout(offerTimeoutRef.current);
+          offerTimeoutRef.current = null;
         }
         await peer.setRemoteDescription(new RTCSessionDescription(answer));
         reportHostConnectionEvent('answer-remote-description-set', 'Host applied remote answer description.');
@@ -1575,6 +1615,15 @@ export default function Tournament() {
         return;
       }
       if (message.type === 'ice' && message.payload) {
+        if (message.sessionId && activeSenderSessionIdRef.current && message.sessionId !== activeSenderSessionIdRef.current) {
+          reportHostConnectionEvent(
+            'sender-ice-session-stale',
+            `Ignoring stale sender ICE for ${message.sessionId}. Active sender session is ${activeSenderSessionIdRef.current}.`,
+            'WARN',
+            cameraPairCode || 'pending'
+          );
+          return;
+        }
         if (!senderIceReceivedLoggedRef.current) {
           senderIceReceivedLoggedRef.current = true;
           reportHostConnectionEvent('sender-ice-received', 'Host received ICE candidate(s) from sender.');

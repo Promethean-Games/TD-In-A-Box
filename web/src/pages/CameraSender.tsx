@@ -485,6 +485,9 @@ export default function CameraSender() {
         if (peer.signalingState !== 'stable' || peer.remoteDescription) {
           return;
         }
+        if (!message.sessionId || message.sessionId !== hostSessionIdRef.current) {
+          return;
+        }
         await peer.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
@@ -494,6 +497,9 @@ export default function CameraSender() {
         return;
       }
       if (message.type === 'ice' && message.payload) {
+        if (message.sessionId && hostSessionIdRef.current && message.sessionId !== hostSessionIdRef.current) {
+          return;
+        }
         const candidate = message.payload as RTCIceCandidateInit;
         if (peer.remoteDescription) {
           await peer.addIceCandidate(new RTCIceCandidate(candidate));
@@ -503,6 +509,9 @@ export default function CameraSender() {
         return;
       }
       if (message.type === 'stop') {
+        if (message.sessionId && hostSessionIdRef.current && message.sessionId !== hostSessionIdRef.current) {
+          return;
+        }
         manualStopRef.current = true;
         await stopSession(false);
       }
