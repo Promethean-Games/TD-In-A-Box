@@ -1714,6 +1714,15 @@
   width: 100%;
 }
 
+.tournament-page .broadcast-tab,
+.tournament-page .broadcast-preview-wide,
+.tournament-page .broadcast-grid,
+.tournament-page .broadcast-panel,
+.tournament-page .broadcast-upgrade-card,
+.tournament-page .camera-preview-shell {
+  width: 100%;
+}
+
 .broadcast-preview-wide {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1860,6 +1869,10 @@
   gap: 10px;
   align-items: start;
   width: 100%;
+}
+
+.tournament-page .broadcast-grid {
+  grid-template-columns: 1fr;
 }
 
 .broadcast-panel,
