@@ -27,6 +27,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -79,6 +81,7 @@ class CameraSenderService : Service() {
         }
     }
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + serviceExceptionHandler)
+    private val sessionMutex = Mutex()
     private val _uiState = MutableStateFlow(SenderUiState())
     private val localBinder = LocalBinder()
     private val previewRenderers = CopyOnWriteArraySet<SurfaceViewRenderer>()
@@ -484,151 +487,158 @@ class CameraSenderService : Service() {
 
         val rtcPeer = peerConnection ?: return
         val currentSignalClient = signalClient ?: return
+        var stopRequested = false
 
-        when (message.type) {
-            "offer" -> {
-                if (rtcPeer.signalingState() != PeerConnection.SignalingState.STABLE || rtcPeer.remoteDescription != null) {
-                    logConnectionReport(
-                        stage = "offer-ignored",
-                        detail = "Host offer ignored because peer state was not stable (${rtcPeer.signalingState()}) or remote description already existed.",
-                        severity = "WARN",
-                        pairCode = pairCode
-                    )
-                    return
-                }
-                logConnectionReport(
-                    stage = "offer-received",
-                    detail = "Host offer received; preparing answer for host session ${activeHostSessionId ?: "unknown"}."
-                )
-                try {
-                    hasReceivedHostOffer = true
-                    readyAnnouncementJob?.cancel()
-                    readyAnnouncementJob = null
-                    offerTimeoutJob?.cancel()
-                    offerTimeoutJob = null
-                    val payload = message.payload as? JsonObject ?: run {
+        sessionMutex.withLock {
+            when (message.type) {
+                "offer" -> {
+                    if (rtcPeer.signalingState() != PeerConnection.SignalingState.STABLE || rtcPeer.remoteDescription != null) {
                         logConnectionReport(
-                            stage = "offer-payload-missing",
-                            detail = "Host offer payload was missing or malformed.",
-                            severity = "ERROR",
-                            pairCode = pairCode
-                        )
-                        return
-                    }
-                    val sdp = payload["sdp"]?.jsonPrimitive?.content ?: run {
-                        logConnectionReport(
-                            stage = "offer-sdp-missing",
-                            detail = "Host offer was missing the SDP payload.",
-                            severity = "ERROR",
-                            pairCode = pairCode
-                        )
-                        return
-                    }
-                    withTimeout(10_000) {
-                        rtcPeer.setRemoteDescriptionAwait(SessionDescription(SessionDescription.Type.OFFER, sdp))
-                    }
-                    logConnectionReport(
-                        stage = "remote-description-set",
-                        detail = "Remote host offer applied successfully.",
-                        pairCode = pairCode
-                    )
-                    drainPendingIce(rtcPeer)
-                    val answer = withTimeout(10_000) {
-                        rtcPeer.createAnswerAwait()
-                    }
-                    logConnectionReport(
-                        stage = "answer-created",
-                        detail = "Local answer created; applying local description.",
-                        pairCode = pairCode
-                    )
-                    val localDescriptionApplied = runCatching {
-                        withTimeout(10_000) {
-                            rtcPeer.setLocalDescriptionAwait(answer)
-                        }
-                    }.isSuccess
-                    if (localDescriptionApplied) {
-                        logConnectionReport(
-                            stage = "local-description-set",
-                            detail = "Local answer applied successfully.",
-                            pairCode = pairCode
-                        )
-                    } else {
-                        logConnectionReport(
-                            stage = "local-description-timeout",
-                            detail = "setLocalDescription timed out; sending answer payload fallback.",
+                            stage = "offer-ignored",
+                            detail = "Host offer ignored because peer state was not stable (${rtcPeer.signalingState()}) or remote description already existed.",
                             severity = "WARN",
                             pairCode = pairCode
                         )
+                        return@withLock
                     }
-                    withTimeout(6_000) {
-                        currentSignalClient.send(
-                            PairSignalMessagePayload(
-                                type = "answer",
-                                from = "sender",
-                                ts = System.currentTimeMillis(),
-                                sessionId = activeSessionId ?: message.sessionId,
-                                payload = buildJsonObject {
-                                    put("type", answer.type.canonicalForm())
-                                    put("sdp", answer.description)
-                                }
+                    logConnectionReport(
+                        stage = "offer-received",
+                        detail = "Host offer received; preparing answer for host session ${activeHostSessionId ?: "unknown"}."
+                    )
+                    try {
+                        hasReceivedHostOffer = true
+                        readyAnnouncementJob?.cancel()
+                        readyAnnouncementJob = null
+                        offerTimeoutJob?.cancel()
+                        offerTimeoutJob = null
+                        val payload = message.payload as? JsonObject ?: run {
+                            logConnectionReport(
+                                stage = "offer-payload-missing",
+                                detail = "Host offer payload was missing or malformed.",
+                                severity = "ERROR",
+                                pairCode = pairCode
                             )
+                            return@withLock
+                        }
+                        val sdp = payload["sdp"]?.jsonPrimitive?.content ?: run {
+                            logConnectionReport(
+                                stage = "offer-sdp-missing",
+                                detail = "Host offer was missing the SDP payload.",
+                                severity = "ERROR",
+                                pairCode = pairCode
+                            )
+                            return@withLock
+                        }
+                        withTimeout(10_000) {
+                            rtcPeer.setRemoteDescriptionAwait(SessionDescription(SessionDescription.Type.OFFER, sdp))
+                        }
+                        logConnectionReport(
+                            stage = "remote-description-set",
+                            detail = "Remote host offer applied successfully.",
+                            pairCode = pairCode
+                        )
+                        drainPendingIce(rtcPeer)
+                        val answer = withTimeout(10_000) {
+                            rtcPeer.createAnswerAwait()
+                        }
+                        logConnectionReport(
+                            stage = "answer-created",
+                            detail = "Local answer created; applying local description.",
+                            pairCode = pairCode
+                        )
+                        val localDescriptionApplied = runCatching {
+                            withTimeout(10_000) {
+                                rtcPeer.setLocalDescriptionAwait(answer)
+                            }
+                        }.isSuccess
+                        if (localDescriptionApplied) {
+                            logConnectionReport(
+                                stage = "local-description-set",
+                                detail = "Local answer applied successfully.",
+                                pairCode = pairCode
+                            )
+                        } else {
+                            logConnectionReport(
+                                stage = "local-description-timeout",
+                                detail = "setLocalDescription timed out; sending answer payload fallback.",
+                                severity = "WARN",
+                                pairCode = pairCode
+                            )
+                        }
+                        withTimeout(6_000) {
+                            currentSignalClient.send(
+                                PairSignalMessagePayload(
+                                    type = "answer",
+                                    from = "sender",
+                                    ts = System.currentTimeMillis(),
+                                    sessionId = activeSessionId ?: message.sessionId,
+                                    payload = buildJsonObject {
+                                        put("type", answer.type.canonicalForm())
+                                        put("sdp", answer.description)
+                                    }
+                                )
+                            )
+                        }
+                        updateState(
+                            pairCode = pairCode,
+                            statusText = "Answer sent. Finishing secure connection…",
+                            connectionState = SenderConnectionState.CONNECTING,
+                            isStreaming = true,
+                            errorText = null
+                        )
+                        logConnectionReport(
+                            stage = "answer-sent",
+                            detail = "Local answer sent to host; waiting for ICE/connection completion.",
+                            pairCode = pairCode
+                        )
+                        startPostOfferConnectionTimeout(pairCode)
+                    } catch (error: Throwable) {
+                        logConnectionReport(
+                            stage = "offer-handling-failed",
+                            detail = error.message ?: "Offer handling failed.",
+                            severity = "ERROR",
+                            pairCode = pairCode
+                        )
+                        if (!manualDisconnect) {
+                            scheduleReconnect("Offer handling failed.")
+                        }
+                    }
+                }
+
+                "ice" -> {
+                    val payload = message.payload as? JsonObject ?: return@withLock
+                    val candidate = payload.toIceCandidate() ?: return@withLock
+                    if (!hasLoggedInboundIce) {
+                        hasLoggedInboundIce = true
+                        logConnectionReport(
+                            stage = "host-ice-received",
+                            detail = "Host ICE candidates are being received.",
+                            pairCode = pairCode
                         )
                     }
-                    updateState(
-                        pairCode = pairCode,
-                        statusText = "Answer sent. Finishing secure connection…",
-                        connectionState = SenderConnectionState.CONNECTING,
-                        isStreaming = true,
-                        errorText = null
-                    )
-                    logConnectionReport(
-                        stage = "answer-sent",
-                        detail = "Local answer sent to host; waiting for ICE/connection completion.",
-                        pairCode = pairCode
-                    )
-                    startPostOfferConnectionTimeout(pairCode)
-                } catch (error: Throwable) {
-                    logConnectionReport(
-                        stage = "offer-handling-failed",
-                        detail = error.message ?: "Offer handling failed.",
-                        severity = "ERROR",
-                        pairCode = pairCode
-                    )
-                    if (!manualDisconnect) {
-                        scheduleReconnect("Offer handling failed.")
+                    if (rtcPeer.remoteDescription != null) {
+                        rtcPeer.addIceCandidate(candidate)
+                    } else {
+                        pendingRemoteIce += candidate
                     }
                 }
-            }
 
-            "ice" -> {
-                val payload = message.payload as? JsonObject ?: return
-                val candidate = payload.toIceCandidate() ?: return
-                if (!hasLoggedInboundIce) {
-                    hasLoggedInboundIce = true
+                "stop" -> {
                     logConnectionReport(
-                        stage = "host-ice-received",
-                        detail = "Host ICE candidates are being received.",
-                        pairCode = pairCode
+                        stage = "host-stop",
+                        detail = "Host requested sender stop.",
+                        severity = "WARN"
                     )
-                }
-                if (rtcPeer.remoteDescription != null) {
-                    rtcPeer.addIceCandidate(candidate)
-                } else {
-                    pendingRemoteIce += candidate
+                    manualDisconnect = true
+                    stopRequested = true
                 }
             }
+        }
 
-            "stop" -> {
-                logConnectionReport(
-                    stage = "host-stop",
-                    detail = "Host requested sender stop.",
-                    severity = "WARN"
-                )
-                manualDisconnect = true
-                shutdownSession(notifyStop = false)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+        if (stopRequested) {
+            shutdownSession(notifyStop = false)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
     }
 
@@ -682,80 +692,82 @@ class CameraSenderService : Service() {
         clearPairCode: Boolean = true,
         stopForegroundSession: Boolean = false
     ) {
-        readyAnnouncementJob?.cancel()
-        readyAnnouncementJob = null
-        offerTimeoutJob?.cancel()
-        offerTimeoutJob = null
-        postOfferConnectionTimeoutJob?.cancel()
-        postOfferConnectionTimeoutJob = null
-        hasReceivedHostOffer = false
-        hasLoggedInboundIce = false
-        hasLoggedOutboundIce = false
-        val stopSessionId = activeSessionId
-        activeSessionId = null
-        activeHostSessionId = null
-        reconnectJob?.cancel()
-        reconnectJob = null
+        sessionMutex.withLock {
+            readyAnnouncementJob?.cancel()
+            readyAnnouncementJob = null
+            offerTimeoutJob?.cancel()
+            offerTimeoutJob = null
+            postOfferConnectionTimeoutJob?.cancel()
+            postOfferConnectionTimeoutJob = null
+            hasReceivedHostOffer = false
+            hasLoggedInboundIce = false
+            hasLoggedOutboundIce = false
+            val stopSessionId = activeSessionId
+            activeSessionId = null
+            activeHostSessionId = null
+            reconnectJob?.cancel()
+            reconnectJob = null
 
-        val currentSignalClient = signalClient
-        signalClient = null
-        if (notifyStop) {
-            runCatching {
-                currentSignalClient?.send(
-                    PairSignalMessagePayload(
-                        type = "stop",
-                        from = "sender",
-                        ts = System.currentTimeMillis(),
-                        sessionId = stopSessionId
+            val currentSignalClient = signalClient
+            signalClient = null
+            if (notifyStop) {
+                runCatching {
+                    currentSignalClient?.send(
+                        PairSignalMessagePayload(
+                            type = "stop",
+                            from = "sender",
+                            ts = System.currentTimeMillis(),
+                            sessionId = stopSessionId
+                        )
                     )
-                )
+                }
             }
-        }
-        runCatching {
-            currentSignalClient?.close()
-        }
-
-        pendingRemoteIce.clear()
-        // PeerConnection owns sender lifecycle; disposing both causes double-dispose crashes.
-        videoSender = null
-        val activePeerConnection = peerConnection
-        peerConnection = null
-        runCatching { activePeerConnection?.dispose() }
-
-        runCatching { videoCapturer?.stopCapture() }
-        runCatching { videoCapturer?.dispose() }
-        videoCapturer = null
-
-        videoTrack?.let { track ->
-            previewRenderers.forEach { renderer ->
-                track.removeSink(renderer)
+            runCatching {
+                currentSignalClient?.close()
             }
-            track.dispose()
-        }
-        videoTrack = null
 
-        surfaceTextureHelper?.dispose()
-        surfaceTextureHelper = null
-        videoSource?.dispose()
-        videoSource = null
+            pendingRemoteIce.clear()
+            // PeerConnection owns sender lifecycle; disposing both causes double-dispose crashes.
+            videoSender = null
+            val activePeerConnection = peerConnection
+            peerConnection = null
+            runCatching { activePeerConnection?.dispose() }
 
-        if (clearPairCode) {
-            activePairCode = null
-        }
+            runCatching { videoCapturer?.stopCapture() }
+            runCatching { videoCapturer?.dispose() }
+            videoCapturer = null
 
-        updateState(
-            pairCode = if (clearPairCode) "" else activePairCode.orEmpty(),
-            statusText = "Disconnected",
-            connectionState = SenderConnectionState.DISCONNECTED,
-            isStreaming = false,
-            errorText = null
-        )
-        releaseWakeLock()
+            videoTrack?.let { track ->
+                previewRenderers.forEach { renderer ->
+                    track.removeSink(renderer)
+                }
+                track.dispose()
+            }
+            videoTrack = null
 
-        if (stopForegroundSession) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            updateNotification("Native sender idle")
+            surfaceTextureHelper?.dispose()
+            surfaceTextureHelper = null
+            videoSource?.dispose()
+            videoSource = null
+
+            if (clearPairCode) {
+                activePairCode = null
+            }
+
+            updateState(
+                pairCode = if (clearPairCode) "" else activePairCode.orEmpty(),
+                statusText = "Disconnected",
+                connectionState = SenderConnectionState.DISCONNECTED,
+                isStreaming = false,
+                errorText = null
+            )
+            releaseWakeLock()
+
+            if (stopForegroundSession) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                updateNotification("Native sender idle")
+            }
         }
     }
 
