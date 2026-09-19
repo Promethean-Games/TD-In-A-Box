@@ -166,14 +166,20 @@ class CameraSenderActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         if (!isServiceBound) {
-            val bound = bindService(
-                Intent(this, CameraSenderService::class.java),
-                serviceConnection,
-                Context.BIND_AUTO_CREATE
-            )
-            isServiceBound = bound
-            if (!bound) {
-                localStatusText = "Camera service unavailable"
+            runCatching {
+                val bound = bindService(
+                    Intent(this, CameraSenderService::class.java),
+                    serviceConnection,
+                    Context.BIND_AUTO_CREATE
+                )
+                isServiceBound = bound
+                if (!bound) {
+                    localStatusText = "Camera service unavailable"
+                }
+            }.onFailure {
+                isServiceBound = false
+                localStatusText = "Launcher could not bind to the camera service"
+                localErrorText = it.message ?: "Service binding failed."
             }
         }
     }
@@ -218,7 +224,12 @@ class CameraSenderActivity : ComponentActivity() {
 
     private fun startNativeSender(pairCode: String) {
         localStatusText = "Starting native foreground sender…"
-        CameraSenderService.startSender(this, pairCode)
+        runCatching {
+            CameraSenderService.startSender(this, pairCode)
+        }.onFailure {
+            localStatusText = "Unable to start the camera sender"
+            localErrorText = it.message ?: "Service start failed."
+        }
     }
 
     private fun batteryOptimizationsIgnored(): Boolean {

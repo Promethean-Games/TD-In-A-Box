@@ -96,7 +96,6 @@ class CameraSenderService : Service() {
         super.onCreate()
         notificationManager = getSystemService(NotificationManager::class.java)
         ensureNotificationChannel()
-        initializePeerFactory()
     }
 
     override fun onBind(intent: Intent?): IBinder = localBinder
@@ -158,21 +157,48 @@ class CameraSenderService : Service() {
     }
 
     private fun initializePeerFactory() {
-        PeerConnectionFactory.initialize(
-            PeerConnectionFactory.InitializationOptions.builder(applicationContext)
-                .createInitializationOptions()
-        )
-        eglBase = EglBase.create()
-        peerConnectionFactory = PeerConnectionFactory.builder()
-            .setVideoEncoderFactory(
-                DefaultVideoEncoderFactory(
-                    eglBase?.eglBaseContext,
-                    true,
-                    true
-                )
+        if (peerConnectionFactory != null && eglBase != null) return
+        runCatching {
+            PeerConnectionFactory.initialize(
+                PeerConnectionFactory.InitializationOptions.builder(applicationContext)
+                    .createInitializationOptions()
             )
-            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase?.eglBaseContext))
-            .createPeerConnectionFactory()
+        }
+        val createdEglBase = runCatching { EglBase.create() }.getOrNull()
+        if (createdEglBase == null) {
+            updateState(
+                pairCode = _uiState.value.pairCode,
+                statusText = "Native camera is unavailable on this device.",
+                connectionState = SenderConnectionState.DISCONNECTED,
+                isStreaming = false,
+                errorText = "Unable to initialize the WebRTC rendering stack."
+            )
+            return
+        }
+        eglBase = createdEglBase
+        peerConnectionFactory = runCatching {
+            PeerConnectionFactory.builder()
+                .setVideoEncoderFactory(
+                    DefaultVideoEncoderFactory(
+                        eglBase?.eglBaseContext,
+                        true,
+                        true
+                    )
+                )
+                .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase?.eglBaseContext))
+                .createPeerConnectionFactory()
+        }.getOrNull()
+        if (peerConnectionFactory == null) {
+            eglBase?.release()
+            eglBase = null
+            updateState(
+                pairCode = _uiState.value.pairCode,
+                statusText = "Native camera is unavailable on this device.",
+                connectionState = SenderConnectionState.DISCONNECTED,
+                isStreaming = false,
+                errorText = "WebRTC factory creation failed."
+            )
+        }
     }
 
     private suspend fun connect(pairCode: String) {
@@ -190,6 +216,17 @@ class CameraSenderService : Service() {
         manualDisconnect = false
         activePairCode = pairCode
         reconnectJob?.cancel()
+        initializePeerFactory()
+        if (peerConnectionFactory == null || eglBase == null) {
+            updateState(
+                pairCode = pairCode,
+                statusText = "Native camera is unavailable on this device.",
+                connectionState = SenderConnectionState.DISCONNECTED,
+                isStreaming = false,
+                errorText = "WebRTC initialization did not complete."
+            )
+            return
+        }
         startForeground(NOTIFICATION_ID, buildNotification("Starting native sender…"))
         acquireWakeLock()
         updateState(
