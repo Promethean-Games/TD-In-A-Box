@@ -37,6 +37,7 @@ export default function TdtvViewer() {
   const playerRef = useRef<HTMLDivElement | null>(null);
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isVideoReady, setIsVideoReady] = useState(false);
 
   const filteredChannels = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -66,7 +67,11 @@ export default function TdtvViewer() {
   const activePublication = getBroadcastPublicationByChannelId(activeChannel.id);
   const publishedStream = getPublishedBroadcastLiveStream(activeChannel.id);
   const liveStreamUrl = isLobbyChannel ? '' : (activePublication?.streamUrl ?? '');
-  const hasLiveVideo = Boolean(!isLobbyChannel && (publishedStream || liveStreamUrl));
+  const streamHasLiveVideoTrack = useMemo(
+    () => Boolean(publishedStream?.getVideoTracks().some((track) => track.readyState === 'live')),
+    [publishedStream]
+  );
+  const shouldAttemptLiveVideo = !isLobbyChannel && (streamHasLiveVideoTrack || liveStreamUrl.trim().length > 0);
 
   useEffect(() => {
     return subscribeToBroadcastPublications(() => {
@@ -90,15 +95,27 @@ export default function TdtvViewer() {
   }, [isLobbyChannel, lobbySlides.length]);
 
   useEffect(() => {
+    setIsVideoReady(false);
+  }, [activeChannel.id, liveStreamUrl, streamHasLiveVideoTrack]);
+
+  useEffect(() => {
     const video = liveVideoRef.current;
-    if (!video || !hasLiveVideo || isLobbyChannel) return;
+    if (!video || !shouldAttemptLiveVideo || isLobbyChannel) {
+      if (video) {
+        video.pause();
+        video.srcObject = null;
+        video.removeAttribute('src');
+      }
+      return;
+    }
     video.muted = true;
     video.playsInline = true;
     if (publishedStream) {
       if (video.srcObject !== publishedStream) {
+        video.removeAttribute('src');
         video.srcObject = publishedStream;
       }
-      void video.play().catch(() => undefined);
+      void video.play().catch(() => setIsVideoReady(false));
       return;
     }
     if (video.src !== liveStreamUrl) {
@@ -106,8 +123,8 @@ export default function TdtvViewer() {
       video.src = liveStreamUrl;
       video.load();
     }
-    void video.play().catch(() => undefined);
-  }, [hasLiveVideo, isLobbyChannel, liveStreamUrl, publishedStream]);
+    void video.play().catch(() => setIsVideoReady(false));
+  }, [isLobbyChannel, liveStreamUrl, publishedStream, shouldAttemptLiveVideo]);
 
   useEffect(() => {
     const syncFullscreenState = () => {
@@ -217,14 +234,18 @@ export default function TdtvViewer() {
         ) : (
           <main className="viewer-main">
             <section className="viewer-player" ref={playerRef}>
-              {hasLiveVideo ? (
+              {shouldAttemptLiveVideo ? (
                 <video
                   ref={liveVideoRef}
-                  className="viewer-live-video"
+                  className={`viewer-live-video ${isVideoReady ? 'is-ready' : ''}`}
                   autoPlay
                   muted
                   playsInline
                   controls={false}
+                  onLoadedData={() => setIsVideoReady(true)}
+                  onCanPlay={() => setIsVideoReady(true)}
+                  onPlaying={() => setIsVideoReady(true)}
+                  onError={() => setIsVideoReady(false)}
                 />
               ) : null}
               <div className="player-head">

@@ -803,11 +803,6 @@ export default function Tournament() {
       .map((player) => player.id)
       .filter((playerId) => playerId !== championId && playerId !== runnerUpId)
   ];
-  const raceOverlayPlayers = useMemo(() => {
-    const playerA = players[0]?.displayName ?? 'Red Team';
-    const playerB = players[1]?.displayName ?? 'Blue Team';
-    return { red: playerA, blue: playerB };
-  }, [players]);
 
   const payoutLeaderboard = orderedLeaderboard
     .slice(0, paidOutSlots)
@@ -2424,33 +2419,6 @@ export default function Tournament() {
                         Channel: {selectedBroadcastChannel ? formatChannelOptionLabel(selectedBroadcastChannel) : 'No eligible channel'}
                       </span>
                       <span>Camera table: {activeCameraTable ? `Table ${activeCameraTable}` : 'Not mapped'}</span>
-                    </div>
-                    <div className="broadcast-overlay-preview-panel">
-                      <div className="broadcast-overlay-preview-lower-third">
-                        <div className="overlay-label">Race Overlay</div>
-                        <div className="overlay-lower-third-row">
-                          <div className="overlay-side overlay-side--red">
-                            <span>Red</span>
-                            <strong>{raceOverlayPlayers.red}</strong>
-                          </div>
-                          <div className="overlay-divider">VS</div>
-                          <div className="overlay-side overlay-side--blue">
-                            <span>Blue</span>
-                            <strong>{raceOverlayPlayers.blue}</strong>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="broadcast-timing-slot-list">
-                      {broadcastConfig.timingSlots.filter((slot) => slot.enabled).map((slot) => (
-                        <div key={slot.id} className={`broadcast-timing-slot broadcast-timing-slot--${slot.kind.toLowerCase()}`}>
-                          <div>
-                            <span className="broadcast-timing-slot-kind">{slot.kind}</span>
-                            <strong>{slot.label}</strong>
-                          </div>
-                          <span>{slot.durationSeconds}s</span>
-                        </div>
-                      ))}
                     </div>
                     <div className="broadcast-readiness-panel">
                       {broadcastReadinessChecklist.map((item) => (

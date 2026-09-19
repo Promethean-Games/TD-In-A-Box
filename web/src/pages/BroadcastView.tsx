@@ -42,13 +42,18 @@ export default function BroadcastView() {
   const playerRef = useRef<HTMLDivElement | null>(null);
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isVideoReady, setIsVideoReady] = useState(false);
   const [status, setStatus] = useState<BroadcastStatus>(channel?.status ?? 'LIVE');
   const [isStreamRunning, setIsStreamRunning] = useState(channel?.status === 'LIVE');
   const [runtimeConfig] = useState<BroadcastRuntimeConfig>(() => getBroadcastRuntimeConfig());
   const activePublication = getBroadcastPublicationByChannelId(channel?.id);
   const publishedStream = getPublishedBroadcastLiveStream(channel?.id);
   const liveStreamUrl = activePublication?.streamUrl ?? '';
-  const hasLiveVideo = Boolean(publishedStream || liveStreamUrl);
+  const streamHasLiveVideoTrack = useMemo(
+    () => Boolean(publishedStream?.getVideoTracks().some((track) => track.readyState === 'live')),
+    [publishedStream]
+  );
+  const shouldAttemptLiveVideo = streamHasLiveVideoTrack || liveStreamUrl.trim().length > 0;
 
   const formatPlayerSystemId = (value: string | undefined) => {
     if (!value) return null;
@@ -85,15 +90,27 @@ export default function BroadcastView() {
   }, []);
 
   useEffect(() => {
+    setIsVideoReady(false);
+  }, [channel?.id, liveStreamUrl, streamHasLiveVideoTrack]);
+
+  useEffect(() => {
     const video = liveVideoRef.current;
-    if (!video || !hasLiveVideo) return;
+    if (!video || !shouldAttemptLiveVideo) {
+      if (video) {
+        video.pause();
+        video.srcObject = null;
+        video.removeAttribute('src');
+      }
+      return;
+    }
     video.muted = true;
     video.playsInline = true;
     if (publishedStream) {
       if (video.srcObject !== publishedStream) {
+        video.removeAttribute('src');
         video.srcObject = publishedStream;
       }
-      void video.play().catch(() => undefined);
+      void video.play().catch(() => setIsVideoReady(false));
       return;
     }
     if (video.src !== liveStreamUrl) {
@@ -101,8 +118,8 @@ export default function BroadcastView() {
       video.src = liveStreamUrl;
       video.load();
     }
-    void video.play().catch(() => undefined);
-  }, [hasLiveVideo, liveStreamUrl, publishedStream]);
+    void video.play().catch(() => setIsVideoReady(false));
+  }, [liveStreamUrl, publishedStream, shouldAttemptLiveVideo]);
 
   const toggleFullscreen = async () => {
     const doc = document as FullscreenDoc;
@@ -153,14 +170,18 @@ export default function BroadcastView() {
 
         <section className="broadcast-player">
           <div className="player-surface" ref={playerRef}>
-            {hasLiveVideo ? (
+            {shouldAttemptLiveVideo ? (
               <video
                 ref={liveVideoRef}
-                className="broadcast-live-video"
+                className={`broadcast-live-video ${isVideoReady ? 'is-ready' : ''}`}
                 autoPlay
                 muted
                 playsInline
                 controls={false}
+                onLoadedData={() => setIsVideoReady(true)}
+                onCanPlay={() => setIsVideoReady(true)}
+                onPlaying={() => setIsVideoReady(true)}
+                onError={() => setIsVideoReady(false)}
               />
             ) : null}
             <div className="player-topbar">

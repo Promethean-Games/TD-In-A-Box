@@ -28,6 +28,45 @@ export default function CameraSender() {
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const signalClientRef = useRef<PairSignalClient | null>(null);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const manualStopRef = useRef(false);
+  const hasActivatedSessionRef = useRef(false);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const isConnectingRef = useRef(false);
+  const isConnectedRef = useRef(false);
+  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
+  const stopSessionRef = useRef<(notifyHost?: boolean) => Promise<void>>(async () => undefined);
+  const connectCameraRef = useRef<(mode?: 'manual' | 'auto') => Promise<void>>(async () => undefined);
+
+  const clearReconnectTimer = () => {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  };
+
+  const releaseWakeLock = async () => {
+    const lock = wakeLockRef.current;
+    wakeLockRef.current = null;
+    if (!lock) return;
+    try {
+      await lock.release();
+    } catch {
+      // ignore wake lock release errors during teardown
+    }
+  };
+
+  const requestWakeLock = async () => {
+    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+    try {
+      const wakeLockApi = navigator as Navigator & {
+        wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> };
+      };
+      const lock = await wakeLockApi.wakeLock?.request('screen');
+      if (lock) wakeLockRef.current = lock;
+    } catch {
+      // best effort only; continue without wake lock when unavailable
+    }
+  };
 
   const flushPendingIceCandidates = async (peer: RTCPeerConnection) => {
     if (pendingIceCandidatesRef.current.length === 0) return;
@@ -43,17 +82,19 @@ export default function CameraSender() {
     }
   };
 
-  const stopSession = async () => {
+  const stopSession = async (notifyHost = true) => {
+    clearReconnectTimer();
+    await releaseWakeLock();
     const signalClient = signalClientRef.current;
-    if (signalClient) {
+    if (notifyHost && signalClient) {
       try {
         await signalClient.send({ type: 'stop', from: 'sender', ts: Date.now() });
       } catch {
         // ignore teardown signal errors while closing the session
       }
-      signalClient.close();
-      signalClientRef.current = null;
     }
+    signalClient?.close();
+    signalClientRef.current = null;
     const peer = peerRef.current;
     if (peer) {
       peer.close();
@@ -69,12 +110,28 @@ export default function CameraSender() {
     }
     pendingIceCandidatesRef.current = [];
     setIsConnected(false);
+    isConnectedRef.current = false;
     setStatus('Disconnected');
   };
+  stopSessionRef.current = stopSession;
 
   useEffect(() => {
     return () => {
-      void stopSession();
+      clearReconnectTimer();
+    };
+  }, []);
+
+  useEffect(() => {
+    isConnectingRef.current = isConnecting;
+  }, [isConnecting]);
+
+  useEffect(() => {
+    isConnectedRef.current = isConnected;
+  }, [isConnected]);
+
+  useEffect(() => {
+    return () => {
+      void stopSessionRef.current();
     };
   }, []);
 
@@ -108,14 +165,16 @@ export default function CameraSender() {
         return;
       }
       if (message.type === 'stop') {
-        await stopSession();
+        manualStopRef.current = true;
+        await stopSession(false);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process host signal.');
     }
   };
 
-  const connectCamera = async () => {
+  const connectCamera = async (mode: 'manual' | 'auto' = 'manual') => {
+    if (isConnectingRef.current) return;
     if (!normalizedPairCode) {
       setError('Missing pair code in URL.');
       return;
@@ -131,11 +190,19 @@ export default function CameraSender() {
       return;
     }
 
+    if (mode === 'manual') {
+      manualStopRef.current = false;
+      hasActivatedSessionRef.current = true;
+    }
+
     setIsConnecting(true);
+    isConnectingRef.current = true;
     setError(null);
-    setStatus('Opening camera...');
+    setStatus(mode === 'auto' ? 'Reconnecting camera…' : 'Opening camera...');
     console.debug('[camera-sender] start connect', { pairCode: normalizedPairCode, diagnostics: pairDiagnostics });
     try {
+      clearReconnectTimer();
+      await stopSession(false);
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' } },
         audio: false
@@ -175,14 +242,35 @@ export default function CameraSender() {
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === 'connected') {
           setIsConnected(true);
+          isConnectedRef.current = true;
           setStatus('Live connection established');
+          void requestWakeLock();
         } else if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
           setStatus(`Connection ${peer.connectionState}`);
+          setIsConnected(false);
+          isConnectedRef.current = false;
+          if (!manualStopRef.current) {
+            clearReconnectTimer();
+            reconnectTimerRef.current = window.setTimeout(() => {
+              void connectCameraRef.current('auto');
+            }, 1600);
+          }
         }
       };
       peer.onnegotiationneeded = () => {
         // wait for host to send the offer; sender completes negotiation when it arrives
       };
+
+      stream.getTracks().forEach((track) => {
+        track.onended = () => {
+          if (manualStopRef.current) return;
+          setStatus('Camera track ended. Reconnecting…');
+          clearReconnectTimer();
+          reconnectTimerRef.current = window.setTimeout(() => {
+            void connectCameraRef.current('auto');
+          }, 900);
+        };
+      });
 
       const sendReadySignal = async (attempt: number) => {
         try {
@@ -204,8 +292,42 @@ export default function CameraSender() {
       setError(err instanceof Error ? err.message : 'Unable to start camera sender session.');
     } finally {
       setIsConnecting(false);
+      isConnectingRef.current = false;
     }
   };
+  connectCameraRef.current = connectCamera;
+
+  useEffect(() => {
+    const tryReconnect = () => {
+      if (!hasActivatedSessionRef.current) return;
+      if (manualStopRef.current) return;
+      if (document.visibilityState === 'hidden') return;
+      const stream = streamRef.current;
+      const tracksLive = Boolean(stream?.getVideoTracks().some((track) => track.readyState === 'live'));
+      const peerState = peerRef.current?.connectionState;
+      const healthy = tracksLive && (peerState === 'connected' || peerState === 'connecting');
+      if (healthy || isConnectingRef.current) return;
+      clearReconnectTimer();
+      reconnectTimerRef.current = window.setTimeout(() => {
+        void connectCameraRef.current('auto');
+      }, 500);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        tryReconnect();
+      }
+    };
+
+    window.addEventListener('focus', tryReconnect);
+    window.addEventListener('pageshow', tryReconnect);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', tryReconnect);
+      window.removeEventListener('pageshow', tryReconnect);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [normalizedPairCode, pairDiagnostics]);
 
   return (
     <section className="camera-sender-page">
@@ -217,11 +339,18 @@ export default function CameraSender() {
 
       <div className="camera-sender-actions">
         {!isConnected ? (
-          <button type="button" className="btn-primary" onClick={connectCamera} disabled={isConnecting}>
+          <button type="button" className="btn-primary" onClick={() => void connectCamera('manual')} disabled={isConnecting}>
             {isConnecting ? 'Connecting...' : 'Connect Camera'}
           </button>
         ) : (
-          <button type="button" className="btn-secondary" onClick={() => void stopSession()}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              manualStopRef.current = true;
+              void stopSession();
+            }}
+          >
             Stop Camera Feed
           </button>
         )}
