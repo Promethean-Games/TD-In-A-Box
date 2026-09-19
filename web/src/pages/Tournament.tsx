@@ -209,6 +209,35 @@ export default function Tournament() {
     [cameraPairCode]
   );
 
+  const handleSelectCameraInputMode = (nextMode: CameraInputMode) => {
+    setCameraInputMode(nextMode);
+    if (nextMode === 'QR') {
+      setCameraSourceId('remote-phone');
+      return;
+    }
+    if (nextMode === 'USB') {
+      const preferredUsbCamera =
+        broadcastConfig.cameraList.find((camera) => camera.id === broadcastConfig.cameraId && (camera.type === 'USB' || camera.type === 'OBS')) ??
+        broadcastConfig.cameraList.find((camera) => camera.type === 'USB' || camera.type === 'OBS') ??
+        usbAndCaptureSources[0];
+      if (preferredUsbCamera) {
+        setCameraSourceId(preferredUsbCamera.id);
+      }
+      return;
+    }
+    if (nextMode === 'NETWORK') {
+      const nextNetworkSource =
+        broadcastConfig.cameraList.find((camera) => camera.id === broadcastConfig.cameraId && camera.type === 'NETWORK') ??
+        broadcastConfig.cameraList.find((camera) => camera.type === 'NETWORK') ??
+        null;
+      if (nextNetworkSource) {
+        setNetworkCameraName(nextNetworkSource.name);
+        setNetworkCameraUrl(nextNetworkSource.streamUrl ?? '');
+        setCameraSourceId(nextNetworkSource.id);
+      }
+    }
+  };
+
   useEffect(() => {    if (!id) {
       setCurrentTournament(null);
       clearError();
@@ -397,17 +426,16 @@ export default function Tournament() {
     setBroadcastConfig(latest);
   }, [allowedBroadcastChannels]);
   useEffect(() => {
-    if (broadcastConfig.cameraId === 'remote-phone') {
-      setCameraInputMode('QR');
-      if ((broadcastConfig.connectedCameraIds ?? []).includes('remote-phone') && activePreviewStream) {
-        setCameraConnectionState('CONNECTED');
-      } else if (cameraConnectionState !== 'DISCONNECTED') {
-        setCameraConnectionState('DISCONNECTED');
-      }
-      return;
-    }
-
     if (cameraInputMode === 'QR') {
+      if (broadcastConfig.cameraId === 'remote-phone') {
+        if ((broadcastConfig.connectedCameraIds ?? []).includes('remote-phone') && activePreviewStream) {
+          setCameraConnectionState('CONNECTED');
+        } else if (cameraConnectionState !== 'DISCONNECTED') {
+          setCameraConnectionState('DISCONNECTED');
+        }
+        return;
+      }
+
       const preferredCamera =
         broadcastConfig.cameraList.find((camera) => camera.id === broadcastConfig.cameraId) ?? null;
       if (preferredCamera?.type === 'NETWORK' && canUseNetworkCamera) {
@@ -2536,7 +2564,7 @@ export default function Tournament() {
                           <button
                             type="button"
                             className={`camera-mode-tile ${cameraInputMode === 'QR' ? 'active' : ''}`}
-                            onClick={() => setCameraInputMode('QR')}
+                            onClick={() => handleSelectCameraInputMode('QR')}
                           >
                             <strong>QR Pair</strong>
                             <span>Recommended for Pro and above</span>
@@ -2544,7 +2572,7 @@ export default function Tournament() {
                           <button
                             type="button"
                             className={`camera-mode-tile ${cameraInputMode === 'USB' ? 'active' : ''}`}
-                            onClick={() => setCameraInputMode('USB')}
+                            onClick={() => handleSelectCameraInputMode('USB')}
                           >
                             <strong>USB Camera</strong>
                             <span>Pro and above</span>
@@ -2552,7 +2580,7 @@ export default function Tournament() {
                           <button
                             type="button"
                             className={`camera-mode-tile ${cameraInputMode === 'NETWORK' ? 'active' : ''}`}
-                            onClick={() => setCameraInputMode('NETWORK')}
+                            onClick={() => handleSelectCameraInputMode('NETWORK')}
                             disabled={!canUseNetworkCamera}
                           >
                             <strong>Network Camera</strong>

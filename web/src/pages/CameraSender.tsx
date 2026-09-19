@@ -33,6 +33,9 @@ type BatteryManagerLike = {
 type NetworkInformationLike = {
   effectiveType?: string;
   downlink?: number;
+  rtt?: number;
+  type?: string;
+  saveData?: boolean;
   addEventListener?: (type: 'change', listener: () => void) => void;
   removeEventListener?: (type: 'change', listener: () => void) => void;
 };
@@ -108,6 +111,11 @@ function describeConnection(
 export default function CameraSender() {
   const { pairCode = '' } = useParams<{ pairCode: string }>();
   const normalizedPairCode = useMemo(() => pairCode.trim().toUpperCase(), [pairCode]);
+  const [pairInput, setPairInput] = useState(normalizedPairCode);
+  const effectivePairCode = useMemo(
+    () => (pairInput || normalizedPairCode).trim().toUpperCase(),
+    [normalizedPairCode, pairInput]
+  );
   const [status, setStatus] = useState('Waiting to connect');
   const [error, setError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -117,10 +125,14 @@ export default function CameraSender() {
   const [clock, setClock] = useState(() => new Date());
   const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
   const [isCharging, setIsCharging] = useState<boolean | null>(null);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [networkState, setNetworkState] = useState(() => ({
     online: typeof navigator !== 'undefined' ? navigator.onLine : true,
     effectiveType: '',
-    downlink: null as number | null
+    downlink: null as number | null,
+    rtt: null as number | null,
+    type: '',
+    saveData: false
   }));
   const [openSections, setOpenSections] = useState<Record<CameraSectionKey, boolean>>({
     pairCode: true,
@@ -130,8 +142,8 @@ export default function CameraSender() {
     advanced: false
   });
   const pairDiagnostics = useMemo(
-    () => getPairSignalDiagnostics(normalizedPairCode || 'pending'),
-    [normalizedPairCode]
+    () => getPairSignalDiagnostics(effectivePairCode || 'pending'),
+    [effectivePairCode]
   );
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -164,6 +176,34 @@ export default function CameraSender() {
       ),
     [isConnected, networkState.downlink, networkState.effectiveType, networkState.online, signalTransport]
   );
+  const networkDiagnostics = useMemo(
+    () => ({
+      connectionType: networkState.type || (networkState.online ? 'Network connection' : 'Offline'),
+      effectiveType: networkState.effectiveType || 'Unknown',
+      downlink: networkState.downlink !== null ? `${networkState.downlink.toFixed(1)} Mbps` : 'Unknown',
+      rtt: networkState.rtt !== null ? `${networkState.rtt} ms` : 'Unknown',
+      recommendedPath: networkState.downlink !== null && networkState.downlink >= 10 ? 'High-quality feed is likely supported.' : 'High-quality feed works best on high-speed Wi‑Fi or wired Ethernet.',
+      transport: signalTransport === 'supabase' ? 'Supabase Realtime' : signalTransport === 'broadcast-channel' ? 'Local Channel' : 'Waiting for transport',
+      peerState: isConnected ? 'Live' : isConnecting ? 'Linking' : 'Standby',
+      battery: formatBatteryLabel(batteryLevel, isCharging)
+    }),
+    [batteryLevel, isCharging, isConnected, isConnecting, networkState.downlink, networkState.effectiveType, networkState.online, networkState.rtt, networkState.type, signalTransport]
+  );
+  const healthMeter = useMemo(() => {
+    switch (connectionSummary.quality) {
+      case 'Excellent':
+        return 4;
+      case 'Strong':
+      case 'Good':
+        return 3;
+      case 'Weak':
+        return 2;
+      case 'Offline':
+        return 0;
+      default:
+        return 1;
+    }
+  }, [connectionSummary.quality]);
   const heroStateLabel = isConnected ? 'LIVE' : isConnecting ? 'LINKING' : error ? 'ATTENTION' : 'READY';
   const heroStateTone = isConnected ? 'live' : isConnecting ? 'linking' : error ? 'attention' : 'ready';
   const heroHeading = isConnected ? 'Remote Camera' : 'Remote Camera Standby';
@@ -280,6 +320,10 @@ export default function CameraSender() {
   stopSessionRef.current = stopSession;
 
   useEffect(() => {
+    setPairInput(normalizedPairCode);
+  }, [normalizedPairCode]);
+
+  useEffect(() => {
     const clockTimer = window.setInterval(() => setClock(new Date()), 30000);
     return () => {
       window.clearInterval(clockTimer);
@@ -335,7 +379,10 @@ export default function CameraSender() {
       setNetworkState({
         online: navigator.onLine,
         effectiveType: connection?.effectiveType ?? '',
-        downlink: typeof connection?.downlink === 'number' ? connection.downlink : null
+        downlink: typeof connection?.downlink === 'number' ? connection.downlink : null,
+        rtt: typeof connection?.rtt === 'number' ? connection.rtt : null,
+        type: connection?.type ?? '',
+        saveData: Boolean(connection?.saveData)
       });
     };
 
@@ -452,8 +499,9 @@ export default function CameraSender() {
 
   const connectCamera = async (mode: 'manual' | 'auto' = 'manual') => {
     if (isConnectingRef.current) return;
-    if (!normalizedPairCode) {
-      setError('Missing pair code in URL.');
+    const nextPairCode = effectivePairCode;
+    if (!nextPairCode) {
+      setError('Enter a valid pair code to connect your camera.');
       return;
     }
     if (!isSupabaseConfigured) {
@@ -498,7 +546,7 @@ export default function CameraSender() {
         }
       }
 
-      const signalClient = await createPairSignalClient(normalizedPairCode, handleSignalMessage);
+      const signalClient = await createPairSignalClient(nextPairCode, handleSignalMessage);
       signalClientRef.current = signalClient;
       setSignalTransport(signalClient.transport);
 
@@ -680,11 +728,59 @@ export default function CameraSender() {
             <span className="camera-live-pill-dot" />
             <strong>{heroStateLabel}</strong>
           </div>
-          <div className="camera-quality-badge">
+          <button
+            type="button"
+            className="camera-quality-badge camera-quality-badge--button"
+            onClick={() => setIsDiagnosticsOpen((current) => !current)}
+            aria-expanded={isDiagnosticsOpen}
+            aria-controls="camera-connection-diagnostics"
+            aria-label="Toggle connection diagnostics"
+          >
+            <div className="camera-health-meter" aria-label={`Connection health ${connectionSummary.quality}`}>
+              {[0, 1, 2, 3].map((index) => (
+                <span key={index} className={index < healthMeter ? 'active' : ''} />
+              ))}
+            </div>
             <strong>{connectionSummary.quality}</strong>
             <span>{connectionSummary.detail}</span>
-          </div>
+          </button>
         </div>
+
+        {isDiagnosticsOpen && (
+          <div id="camera-connection-diagnostics" className="camera-connection-diagnostics" role="dialog" aria-label="Connection diagnostics">
+            <div className="camera-connection-diagnostics-head">
+              <strong>Connection diagnostics</strong>
+              <span>{connectionSummary.quality}</span>
+            </div>
+            <dl className="camera-connection-diagnostics-grid">
+              <div>
+                <dt>Signal</dt>
+                <dd>{networkDiagnostics.effectiveType}</dd>
+              </div>
+              <div>
+                <dt>Downlink</dt>
+                <dd>{networkDiagnostics.downlink}</dd>
+              </div>
+              <div>
+                <dt>RTT</dt>
+                <dd>{networkDiagnostics.rtt}</dd>
+              </div>
+              <div>
+                <dt>Type</dt>
+                <dd>{networkDiagnostics.connectionType}</dd>
+              </div>
+              <div>
+                <dt>Transport</dt>
+                <dd>{networkDiagnostics.transport}</dd>
+              </div>
+              <div>
+                <dt>Battery</dt>
+                <dd>{networkDiagnostics.battery}</dd>
+              </div>
+            </dl>
+            <p className="camera-connection-diagnostics-note">{networkDiagnostics.recommendedPath}</p>
+          </div>
+        )}
 
         <div className="camera-hero-copy">
           <h2>{heroHeading}</h2>
@@ -756,11 +852,26 @@ export default function CameraSender() {
           {openSections.pairCode ? (
             <div className="camera-collapsible-body">
               <div className="camera-pair-code-panel">
-                <strong>{normalizedPairCode || 'Missing'}</strong>
+                {isConnected ? (
+                  <strong>{effectivePairCode || 'Ready'}</strong>
+                ) : (
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={8}
+                    className="camera-pair-code-input"
+                    value={pairInput}
+                    onChange={(event) => setPairInput(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
+                    placeholder="Enter QR code"
+                    aria-label="Pair code"
+                  />
+                )}
                 <p>
-                  {normalizedPairCode
-                    ? `Open Tournament Broadcast, choose remote phone camera pairing, and enter ${normalizedPairCode}.`
-                    : 'Open this page from a valid remote camera link to receive a pairing code.'}
+                  {isConnected
+                    ? 'The camera is already live and paired with the host device.'
+                    : effectivePairCode
+                      ? `Open Tournament Broadcast, choose remote phone camera pairing, and enter ${effectivePairCode}.`
+                      : 'Open this page from a valid remote camera link or type a code to pair manually.'}
                 </p>
               </div>
             </div>
