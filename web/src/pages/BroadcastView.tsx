@@ -4,9 +4,12 @@ import {
   type BroadcastRuntimeConfig,
   BroadcastStatus,
   deriveBroadcastChannelsFromTournaments,
+  getBroadcastPublicationByChannelId,
   getBroadcastChannelById,
+  getPublishedBroadcastLiveStream,
   getBroadcastChannels,
-  getBroadcastRuntimeConfig
+  getBroadcastRuntimeConfig,
+  subscribeToBroadcastPublications
 } from '@/lib/broadcast';
 import { useTournamentStore } from '@/store/tournamentStore';
 import './BroadcastView.css';
@@ -26,7 +29,8 @@ type FullscreenElement = HTMLElement & {
 export default function BroadcastView() {
   const { id } = useParams<{ id: string }>();
   const { tournaments } = useTournamentStore();
-  const derivedChannels = useMemo(() => deriveBroadcastChannelsFromTournaments(tournaments), [tournaments]);
+  const [, setPublicationVersion] = useState(0);
+  const derivedChannels = deriveBroadcastChannelsFromTournaments(tournaments);
   const channel = useMemo(() => {
     if (id) {
       return derivedChannels.find((item) => item.id === id) ?? derivedChannels[0] ?? getBroadcastChannelById(id) ?? getBroadcastChannels()[0];
@@ -36,10 +40,15 @@ export default function BroadcastView() {
 
   const channelName = channel?.name ?? 'Featured Table';
   const playerRef = useRef<HTMLDivElement | null>(null);
+  const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [status, setStatus] = useState<BroadcastStatus>(channel?.status ?? 'LIVE');
   const [isStreamRunning, setIsStreamRunning] = useState(channel?.status === 'LIVE');
   const [runtimeConfig] = useState<BroadcastRuntimeConfig>(() => getBroadcastRuntimeConfig());
+  const activePublication = getBroadcastPublicationByChannelId(channel?.id);
+  const publishedStream = getPublishedBroadcastLiveStream(channel?.id);
+  const liveStreamUrl = activePublication?.streamUrl ?? '';
+  const hasLiveVideo = Boolean(publishedStream || liveStreamUrl);
 
   const formatPlayerSystemId = (value: string | undefined) => {
     if (!value) return null;
@@ -50,7 +59,13 @@ export default function BroadcastView() {
     if (!channel) return;
     setStatus(channel.status);
     setIsStreamRunning(channel.status === 'LIVE');
-  }, [channel?.id, channel?.status]);
+  }, [channel]);
+
+  useEffect(() => {
+    return subscribeToBroadcastPublications(() => {
+      setPublicationVersion((value) => value + 1);
+    });
+  }, []);
 
   useEffect(() => {
     const syncFullscreenState = () => {
@@ -68,6 +83,26 @@ export default function BroadcastView() {
       document.removeEventListener('MSFullscreenChange', syncFullscreenState as EventListener);
     };
   }, []);
+
+  useEffect(() => {
+    const video = liveVideoRef.current;
+    if (!video || !hasLiveVideo) return;
+    video.muted = true;
+    video.playsInline = true;
+    if (publishedStream) {
+      if (video.srcObject !== publishedStream) {
+        video.srcObject = publishedStream;
+      }
+      void video.play().catch(() => undefined);
+      return;
+    }
+    if (video.src !== liveStreamUrl) {
+      video.srcObject = null;
+      video.src = liveStreamUrl;
+      video.load();
+    }
+    void video.play().catch(() => undefined);
+  }, [hasLiveVideo, liveStreamUrl, publishedStream]);
 
   const toggleFullscreen = async () => {
     const doc = document as FullscreenDoc;
@@ -118,6 +153,16 @@ export default function BroadcastView() {
 
         <section className="broadcast-player">
           <div className="player-surface" ref={playerRef}>
+            {hasLiveVideo ? (
+              <video
+                ref={liveVideoRef}
+                className="broadcast-live-video"
+                autoPlay
+                muted
+                playsInline
+                controls={false}
+              />
+            ) : null}
             <div className="player-topbar">
               <div className="stream-meta">
                 <span className="player-live">{isStreamRunning ? 'LIVE' : 'READY'}</span>

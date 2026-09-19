@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { deriveBroadcastChannelsFromTournaments } from '@/lib/broadcast';
+import { deriveBroadcastChannelsFromTournaments, subscribeToBroadcastPublications } from '@/lib/broadcast';
 import { useTournamentStore } from '@/store/tournamentStore';
 import './TvGuide.css';
 
@@ -9,11 +9,18 @@ const filters = ['All', 'Live', 'Standby', 'Featured'];
 export default function TvGuide() {
   const navigate = useNavigate();
   const { tournaments } = useTournamentStore();
-  const channels = useMemo(() => deriveBroadcastChannelsFromTournaments(tournaments), [tournaments]);
+  const [, setPublicationVersion] = useState(0);
+  const channels = deriveBroadcastChannelsFromTournaments(tournaments);
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<string>('All');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [jumpChannel, setJumpChannel] = useState(0);
+
+  useEffect(() => {
+    return subscribeToBroadcastPublications(() => {
+      setPublicationVersion((value) => value + 1);
+    });
+  }, []);
 
   const filteredChannels = useMemo(() => {
     return channels.filter((channel) => {
@@ -30,7 +37,7 @@ export default function TvGuide() {
         (`${channel.number} ${channel.name} ${channel.now} ${channel.next}`.toLowerCase().includes(q))
       );
     });
-  }, [activeFilter, query]);
+  }, [activeFilter, channels, query]);
 
   useEffect(() => {
     if (filteredChannels.length === 0) {

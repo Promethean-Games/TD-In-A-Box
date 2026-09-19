@@ -24,12 +24,18 @@ import QRCode from 'qrcode';
 import { Link, useParams } from 'react-router-dom';
 import { canAccessEntitlement, getCurrentUser, getEffectiveTier } from '@/lib/auth';
 import {
+  type BroadcastStatus,
   PROMETHEAN_SPONSOR_ID,
   TDTV_NETWORK_SPONSOR_ID,
   type BroadcastCameraSource,
   type BroadcastRuntimeConfig,
   type BroadcastTimingSlot,
+  clearBroadcastPublication,
+  clearPublishedBroadcastLiveStream,
+  getBroadcastPublicationByTournamentId,
   getBroadcastRuntimeConfig,
+  publishBroadcastLiveStream,
+  saveBroadcastPublication,
   saveBroadcastRuntimeConfig
 } from '@/lib/broadcast';
 import {
@@ -92,6 +98,10 @@ const BROADCAST_UPSELL_FEATURES = [
 
 function formatLabel(value: string): string {
   return value.replaceAll('_', ' ');
+}
+
+function padChannelNumberForDisplay(value: number): string {
+  return value >= 1000 ? String(value).padStart(4, '0') : String(value).padStart(3, '0');
 }
 
 function getTournamentStageLabel(matchCount: number, status: 'DRAFT' | 'READY' | 'ACTIVE' | 'COMPLETED', hasBracket: boolean): string {
@@ -395,6 +405,20 @@ export default function Tournament() {
     }
 
     if (cameraInputMode === 'QR') {
+      const preferredCamera =
+        broadcastConfig.cameraList.find((camera) => camera.id === broadcastConfig.cameraId) ?? null;
+      if (preferredCamera?.type === 'NETWORK' && canUseNetworkCamera) {
+        setCameraInputMode('NETWORK');
+        setNetworkCameraName(preferredCamera.name);
+        setNetworkCameraUrl(preferredCamera.streamUrl ?? '');
+        setCameraSourceId(preferredCamera.id);
+        return;
+      }
+      if (preferredCamera && (preferredCamera.type === 'USB' || preferredCamera.type === 'OBS')) {
+        setCameraInputMode('USB');
+        setCameraSourceId(preferredCamera.id);
+        return;
+      }
       if ((broadcastConfig.connectedCameraIds ?? []).includes('remote-phone') && activePreviewStream) {
         setCameraConnectionState('CONNECTED');
       } else if (cameraConnectionState !== 'DISCONNECTED') {
@@ -550,6 +574,91 @@ export default function Tournament() {
     selectedCameraSource && broadcastConfig.cameraTableMap
       ? broadcastConfig.cameraTableMap[selectedCameraSource.id] ?? null
       : null;
+  const buildBroadcastPublication = useCallback((statusOverride?: BroadcastStatus) => {
+    if (!currentTournament?.id) return null;
+    const selectedChannel =
+      selectedBroadcastChannel ??
+      allowedBroadcastChannels.find((channel) => channel.id === broadcastConfig.channelId) ??
+      null;
+    if (!selectedChannel) return null;
+
+    const status = statusOverride ?? broadcastConfig.streamStatus;
+    const activeMatch =
+      matches.find((match) => match.state === 'IN_PROGRESS' || match.state === 'READY') ??
+      matches.find((match) => match.state === 'COMPLETE') ??
+      matches[0];
+    const isComingSoon = status === 'UP_NEXT';
+    const tableLabel = activeCameraTable ? `Table ${activeCameraTable}` : 'Table pending';
+    const roundLabel = isComingSoon
+      ? 'Coming Soon'
+      : activeMatch
+        ? `Round ${activeMatch.round}`
+        : tableLabel;
+    const streamUrl = selectedCameraSource?.streamUrl?.trim() || undefined;
+    const channelNumber = padChannelNumberForDisplay(selectedChannel.number);
+    return {
+      channelId: selectedChannel.id,
+      channelNumber,
+      channelName: selectedChannel.entityName,
+      tournamentId: currentTournament.id,
+      tournamentName: currentTournament.name || 'Tournament stream',
+      status,
+      now: isComingSoon ? 'Coming Soon' : currentTournament.name || 'Tournament stream',
+      next: activeMatch ? `Round ${activeMatch.round}` : `Coverage ${tableLabel}`,
+      venue: currentTournament.venueName || currentTournament.location || selectedChannel.entityName || 'Promethean Venue',
+      location: currentTournament.location || currentTournament.venueName || 'Local Event',
+      format: formatLabel(currentTournament.format),
+      round: roundLabel,
+      players: [
+        {
+          id: players[0]?.id ?? '',
+          name: players[0]?.displayName ?? 'Red Team',
+          score: Math.max(0, Number(players[0]?.wins ?? 0))
+        },
+        {
+          id: players[1]?.id ?? '',
+          name: players[1]?.displayName ?? 'Blue Team',
+          score: Math.max(0, Number(players[1]?.wins ?? 0))
+        }
+      ],
+      cameraId: selectedCameraSource?.id ?? '',
+      cameraName: selectedCameraSource?.name ?? 'Camera',
+      cameraType: selectedCameraSource?.type ?? 'WIFI',
+      streamUrl,
+      tableNumber: activeCameraTable ?? null,
+      updatedAt: new Date().toISOString()
+    };
+  }, [activeCameraTable, allowedBroadcastChannels, broadcastConfig.channelId, broadcastConfig.streamStatus, currentTournament, matches, players, selectedBroadcastChannel, selectedCameraSource]);
+
+  useEffect(() => {
+    if (!currentTournament?.id) return;
+    const publication = buildBroadcastPublication();
+    const existing = getBroadcastPublicationByTournamentId(currentTournament.id);
+
+    if (broadcastConfig.streamStatus === 'STANDBY') {
+      if (!existing && !publication) return;
+      const standbyPublication = publication
+        ? { ...publication, status: 'STANDBY' as const, updatedAt: new Date().toISOString() }
+        : existing
+          ? { ...existing, status: 'STANDBY' as const, updatedAt: new Date().toISOString() }
+          : null;
+      if (!standbyPublication) return;
+      saveBroadcastPublication(standbyPublication);
+      clearPublishedBroadcastLiveStream(standbyPublication.channelId);
+      return;
+    }
+
+    if (!publication) return;
+    if (existing && existing.channelId !== publication.channelId) {
+      clearBroadcastPublication(existing.channelId);
+    }
+    saveBroadcastPublication(publication);
+    if (activePreviewStream) {
+      publishBroadcastLiveStream(publication.channelId, activePreviewStream);
+    } else {
+      clearPublishedBroadcastLiveStream(publication.channelId);
+    }
+  }, [activePreviewStream, broadcastConfig.streamStatus, buildBroadcastPublication, currentTournament?.id]);
 
   const previewSelectedSource = useCallback(async () => {
     if (cameraInputMode === 'QR' || !selectedCameraSource) return;
@@ -634,6 +743,14 @@ export default function Tournament() {
     if (cameraConnectionState === 'CONNECTED') return;
     void previewSelectedSource();
   }, [cameraConnectionState, previewSelectedSource, selectedCameraSource, workflowTab]);
+
+  useEffect(() => {
+    if (!selectedCameraSource) return;
+    if (cameraInputMode === 'QR') return;
+    if (broadcastConfig.streamStatus === 'STANDBY') return;
+    if (cameraConnectionState === 'CONNECTED') return;
+    void previewSelectedSource();
+  }, [broadcastConfig.streamStatus, cameraConnectionState, cameraInputMode, previewSelectedSource, selectedCameraSource]);
 
   const editingSponsor = broadcastConfig.sponsorCards.find((sponsor) => sponsor.id === editingSponsorId) ?? null;
   const marketingWordCount = (editingSponsor?.marketingBlip || '').trim().split(/\s+/).filter(Boolean).length;
@@ -1477,6 +1594,7 @@ export default function Tournament() {
 
   const handleDisconnectWirelessCamera = () => {
     const disconnectCameraId = selectedCameraSource?.id ?? '';
+    const existingPublication = getBroadcastPublicationByTournamentId(currentTournament.id);
     stopActiveCameraStream();
     void stopPairingSession();
     setCameraPairCode('');
@@ -1492,6 +1610,9 @@ export default function Tournament() {
     setCameraConnectionState('DISCONNECTED');
     setCameraError(null);
     setCameraStatusNote('Camera disconnected.');
+    if (existingPublication) {
+      clearPublishedBroadcastLiveStream(existingPublication.channelId);
+    }
   };
 
   const handleGoLiveToChannel = () => {
@@ -1537,6 +1658,17 @@ export default function Tournament() {
       streamStatus: scheduleState?.isComingSoon ? 'UP_NEXT' : 'LIVE',
       cameraId: selectedCameraSource?.id ?? current.cameraId
     }));
+    const publication = buildBroadcastPublication(scheduleState?.isComingSoon ? 'UP_NEXT' : 'LIVE');
+    const existingPublication = getBroadcastPublicationByTournamentId(currentTournament.id);
+    if (publication) {
+      if (existingPublication && existingPublication.channelId !== publication.channelId) {
+        clearBroadcastPublication(existingPublication.channelId);
+      }
+      saveBroadcastPublication(publication);
+      if (activePreviewStream) {
+        publishBroadcastLiveStream(publication.channelId, activePreviewStream);
+      }
+    }
     setCameraError(null);
     setIsGoLiveConfirmOpen(false);
     setCameraStatusNote(
@@ -1551,6 +1683,11 @@ export default function Tournament() {
       ...current,
       streamStatus: 'STANDBY'
     }));
+    const publication = buildBroadcastPublication('STANDBY');
+    if (publication) {
+      saveBroadcastPublication(publication);
+      clearPublishedBroadcastLiveStream(publication.channelId);
+    }
     setCameraStatusNote('Broadcast returned to standby.');
   };
 

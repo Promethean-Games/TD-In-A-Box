@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   deriveBroadcastChannelsFromTournaments,
+  getBroadcastPublicationByChannelId,
   getBroadcastChannelById,
+  getPublishedBroadcastLiveStream,
+  subscribeToBroadcastPublications,
   getTdtvLobbySlides,
   TDTV_LOOP_CHANNEL_ID
 } from '@/lib/broadcast';
@@ -25,12 +28,14 @@ export default function TdtvViewer() {
   const { channelId } = useParams<{ channelId?: string }>();
   const navigate = useNavigate();
   const { tournaments } = useTournamentStore();
-  const channels = useMemo(() => deriveBroadcastChannelsFromTournaments(tournaments), [tournaments]);
+  const [, setPublicationVersion] = useState(0);
+  const channels = deriveBroadcastChannelsFromTournaments(tournaments);
   const lobbySlides = useMemo(() => getTdtvLobbySlides(tournaments), [tournaments]);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [lobbySlideIndex, setLobbySlideIndex] = useState(0);
   const playerRef = useRef<HTMLDivElement | null>(null);
+  const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const filteredChannels = useMemo(() => {
@@ -39,7 +44,7 @@ export default function TdtvViewer() {
     return channels.filter((channel) => {
       return `${channel.name} ${channel.venue} ${channel.location} ${channel.now} ${channel.next}`.toLowerCase().includes(q);
     });
-  }, [query]);
+  }, [channels, query]);
 
   const activeChannel = useMemo(() => {
     const byRoute = getBroadcastChannelById(channelId);
@@ -58,6 +63,16 @@ export default function TdtvViewer() {
   }, [channelId, filteredChannels, channels]);
   const isLobbyChannel = activeChannel.id === TDTV_LOOP_CHANNEL_ID;
   const activeLobbySlide = lobbySlides[lobbySlideIndex % Math.max(1, lobbySlides.length)] ?? null;
+  const activePublication = getBroadcastPublicationByChannelId(activeChannel.id);
+  const publishedStream = getPublishedBroadcastLiveStream(activeChannel.id);
+  const liveStreamUrl = isLobbyChannel ? '' : (activePublication?.streamUrl ?? '');
+  const hasLiveVideo = Boolean(!isLobbyChannel && (publishedStream || liveStreamUrl));
+
+  useEffect(() => {
+    return subscribeToBroadcastPublications(() => {
+      setPublicationVersion((value) => value + 1);
+    });
+  }, []);
 
   useEffect(() => {
     const index = filteredChannels.findIndex((channel) => channel.id === activeChannel.id);
@@ -73,6 +88,26 @@ export default function TdtvViewer() {
       window.clearInterval(timer);
     };
   }, [isLobbyChannel, lobbySlides.length]);
+
+  useEffect(() => {
+    const video = liveVideoRef.current;
+    if (!video || !hasLiveVideo || isLobbyChannel) return;
+    video.muted = true;
+    video.playsInline = true;
+    if (publishedStream) {
+      if (video.srcObject !== publishedStream) {
+        video.srcObject = publishedStream;
+      }
+      void video.play().catch(() => undefined);
+      return;
+    }
+    if (video.src !== liveStreamUrl) {
+      video.srcObject = null;
+      video.src = liveStreamUrl;
+      video.load();
+    }
+    void video.play().catch(() => undefined);
+  }, [hasLiveVideo, isLobbyChannel, liveStreamUrl, publishedStream]);
 
   useEffect(() => {
     const syncFullscreenState = () => {
@@ -182,6 +217,16 @@ export default function TdtvViewer() {
         ) : (
           <main className="viewer-main">
             <section className="viewer-player" ref={playerRef}>
+              {hasLiveVideo ? (
+                <video
+                  ref={liveVideoRef}
+                  className="viewer-live-video"
+                  autoPlay
+                  muted
+                  playsInline
+                  controls={false}
+                />
+              ) : null}
               <div className="player-head">
                 <span className="live-pill">{isLobbyChannel ? 'TDTV LOOP' : 'LIVE NOW'}</span>
                 <button type="button" className="fullscreen-btn" onClick={toggleFullscreen}>

@@ -77,6 +77,28 @@ export interface BroadcastRuntimeConfig {
   streamStatus: BroadcastStatus;
 }
 
+export interface BroadcastPublication {
+  channelId: string;
+  channelNumber: string;
+  channelName: string;
+  tournamentId: string;
+  tournamentName: string;
+  status: BroadcastStatus;
+  now: string;
+  next: string;
+  venue: string;
+  location: string;
+  format: string;
+  round: string;
+  players: [BroadcastPlayerScore, BroadcastPlayerScore];
+  cameraId: string;
+  cameraName: string;
+  cameraType: BroadcastCameraSource['type'];
+  streamUrl?: string;
+  tableNumber?: number | null;
+  updatedAt: string;
+}
+
 export const PROMETHEAN_SPONSOR_ID = 'promethean-games';
 export const TDTV_NETWORK_SPONSOR_ID = 'tdtv-network';
 export const TDTV_LOOP_CHANNEL_ID = 'channel-00-loop';
@@ -85,6 +107,9 @@ const TDTV_LOOP_SLIDE_SECONDS = 15;
 const PERMANENT_SPONSOR_DEFAULT_DURATION = 15;
 const PERMANENT_SPONSOR_MIN_DURATION = 5;
 const SYSTEM_SPONSOR_DEFAULTS_STORAGE_KEY = 'tdiab_system_sponsor_defaults';
+const BROADCAST_PUBLICATIONS_STORAGE_KEY = 'tdiab_broadcast_publications';
+const BROADCAST_PUBLICATIONS_EVENT = 'tdiab:broadcast-publications-changed';
+const BROADCAST_STREAM_REGISTRY_KEY = '__tdiabBroadcastStreamRegistry';
 
 export const DEFAULT_BROADCAST_CAMERA_SOURCES: BroadcastCameraSource[] = [];
 
@@ -349,15 +374,184 @@ export function saveBroadcastRuntimeConfig(config: BroadcastRuntimeConfig): Broa
   return config;
 }
 
+function normalizeBroadcastPlayer(player: Partial<BroadcastPlayerScore> | null | undefined, fallbackName: string): BroadcastPlayerScore {
+  return {
+    id: typeof player?.id === 'string' ? player.id : '',
+    name: typeof player?.name === 'string' && player.name.trim().length > 0 ? player.name : fallbackName,
+    score: Math.max(0, Math.floor(Number(player?.score ?? 0) || 0))
+  };
+}
+
+function normalizeBroadcastPublication(raw: Partial<BroadcastPublication> | null | undefined): BroadcastPublication | null {
+  if (!raw || typeof raw.channelId !== 'string' || raw.channelId.trim().length === 0) return null;
+  const fallbackNow = typeof raw.tournamentName === 'string' && raw.tournamentName.trim().length > 0
+    ? raw.tournamentName
+    : 'Tournament stream';
+  return {
+    channelId: raw.channelId,
+    channelNumber: typeof raw.channelNumber === 'string' && raw.channelNumber.trim().length > 0 ? raw.channelNumber : '00',
+    channelName: typeof raw.channelName === 'string' && raw.channelName.trim().length > 0 ? raw.channelName : 'TDTV Channel',
+    tournamentId: typeof raw.tournamentId === 'string' ? raw.tournamentId : '',
+    tournamentName: typeof raw.tournamentName === 'string' && raw.tournamentName.trim().length > 0 ? raw.tournamentName : 'Tournament',
+    status: raw.status === 'LIVE' || raw.status === 'UP_NEXT' || raw.status === 'STANDBY' ? raw.status : 'STANDBY',
+    now: typeof raw.now === 'string' && raw.now.trim().length > 0 ? raw.now : fallbackNow,
+    next: typeof raw.next === 'string' ? raw.next : 'Awaiting next match',
+    venue: typeof raw.venue === 'string' && raw.venue.trim().length > 0 ? raw.venue : 'Promethean Venue',
+    location: typeof raw.location === 'string' && raw.location.trim().length > 0 ? raw.location : 'Local Event',
+    format: typeof raw.format === 'string' && raw.format.trim().length > 0 ? raw.format : 'Tournament',
+    round: typeof raw.round === 'string' && raw.round.trim().length > 0 ? raw.round : 'Live',
+    players: [
+      normalizeBroadcastPlayer(raw.players?.[0], 'Player 1'),
+      normalizeBroadcastPlayer(raw.players?.[1], 'Player 2')
+    ],
+    cameraId: typeof raw.cameraId === 'string' ? raw.cameraId : '',
+    cameraName: typeof raw.cameraName === 'string' && raw.cameraName.trim().length > 0 ? raw.cameraName : 'Camera',
+    cameraType: raw.cameraType === 'WIFI' || raw.cameraType === 'USB' || raw.cameraType === 'OBS' || raw.cameraType === 'NETWORK'
+      ? raw.cameraType
+      : 'WIFI',
+    streamUrl: typeof raw.streamUrl === 'string' && raw.streamUrl.trim().length > 0 ? raw.streamUrl : undefined,
+    tableNumber: typeof raw.tableNumber === 'number' ? Math.max(1, Math.floor(raw.tableNumber)) : null,
+    updatedAt: typeof raw.updatedAt === 'string' && raw.updatedAt.trim().length > 0 ? raw.updatedAt : new Date().toISOString()
+  };
+}
+
+function publicationToChannel(publication: BroadcastPublication): BroadcastChannel {
+  return {
+    id: publication.channelId,
+    number: publication.channelNumber,
+    name: publication.channelName,
+    status: publication.status,
+    now: publication.now,
+    next: publication.next,
+    route: `/tdtv/channel/${publication.channelId}`,
+    venue: publication.venue,
+    location: publication.location,
+    format: publication.format,
+    round: publication.round,
+    watching: 155,
+    players: publication.players
+  };
+}
+
+function readBroadcastPublications(): BroadcastPublication[] {
+  if (typeof window === 'undefined') return [];
+  const raw = window.localStorage.getItem(BROADCAST_PUBLICATIONS_STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as Partial<BroadcastPublication>[];
+    return Array.isArray(parsed)
+      ? parsed.map((entry) => normalizeBroadcastPublication(entry)).filter((entry): entry is BroadcastPublication => Boolean(entry))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeBroadcastPublications(entries: BroadcastPublication[]): BroadcastPublication[] {
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(BROADCAST_PUBLICATIONS_STORAGE_KEY, JSON.stringify(entries));
+    window.dispatchEvent(new Event(BROADCAST_PUBLICATIONS_EVENT));
+  }
+  return entries;
+}
+
+export function getBroadcastPublications(): BroadcastPublication[] {
+  return readBroadcastPublications()
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
+export function getBroadcastPublicationByChannelId(channelId?: string | null): BroadcastPublication | null {
+  if (!channelId) return null;
+  return getBroadcastPublications().find((publication) => publication.channelId === channelId) ?? null;
+}
+
+export function getBroadcastPublicationByTournamentId(tournamentId?: string | null): BroadcastPublication | null {
+  if (!tournamentId) return null;
+  return getBroadcastPublications().find((publication) => publication.tournamentId === tournamentId) ?? null;
+}
+
+export function saveBroadcastPublication(publication: BroadcastPublication): BroadcastPublication {
+  const normalized = normalizeBroadcastPublication(publication);
+  if (!normalized) {
+    throw new Error('Cannot save broadcast publication without a valid channelId.');
+  }
+  const existing = readBroadcastPublications().filter((entry) => entry.channelId !== normalized.channelId);
+  writeBroadcastPublications([normalized, ...existing]);
+  return normalized;
+}
+
+export function clearBroadcastPublication(channelId: string): void {
+  if (!channelId) return;
+  const next = readBroadcastPublications().filter((entry) => entry.channelId !== channelId);
+  writeBroadcastPublications(next);
+  clearPublishedBroadcastLiveStream(channelId);
+}
+
+export function subscribeToBroadcastPublications(onChange: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  const handleBroadcastUpdate = () => onChange();
+  const handleStorage = (event: StorageEvent) => {
+    if (!event.key || event.key === BROADCAST_PUBLICATIONS_STORAGE_KEY) {
+      onChange();
+    }
+  };
+  window.addEventListener(BROADCAST_PUBLICATIONS_EVENT, handleBroadcastUpdate);
+  window.addEventListener('storage', handleStorage);
+  return () => {
+    window.removeEventListener(BROADCAST_PUBLICATIONS_EVENT, handleBroadcastUpdate);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+function getPublishedStreamRegistry(): Record<string, MediaStream> {
+  const root = globalThis as typeof globalThis & { [BROADCAST_STREAM_REGISTRY_KEY]?: Record<string, MediaStream> };
+  if (!root[BROADCAST_STREAM_REGISTRY_KEY]) {
+    root[BROADCAST_STREAM_REGISTRY_KEY] = {};
+  }
+  return root[BROADCAST_STREAM_REGISTRY_KEY] as Record<string, MediaStream>;
+}
+
+export function publishBroadcastLiveStream(channelId: string, stream: MediaStream | null): void {
+  if (!channelId) return;
+  const registry = getPublishedStreamRegistry();
+  if (stream) {
+    registry[channelId] = stream;
+    return;
+  }
+  delete registry[channelId];
+}
+
+export function getPublishedBroadcastLiveStream(channelId?: string | null): MediaStream | null {
+  if (!channelId) return null;
+  return getPublishedStreamRegistry()[channelId] ?? null;
+}
+
+export function clearPublishedBroadcastLiveStream(channelId: string): void {
+  if (!channelId) return;
+  const registry = getPublishedStreamRegistry();
+  delete registry[channelId];
+}
+
 export const broadcastChannels: BroadcastChannel[] = [];
 
 export function getBroadcastChannels(): BroadcastChannel[] {
-  return [...broadcastChannels];
+  const publicationChannels = getBroadcastPublications().map((publication) => publicationToChannel(publication));
+  const all = [...publicationChannels, ...broadcastChannels];
+  const seen = new Set<string>();
+  return all.filter((channel) => {
+    if (seen.has(channel.id)) return false;
+    seen.add(channel.id);
+    return true;
+  });
 }
 
 export function getBroadcastChannelById(channelId?: string | null): BroadcastChannel | undefined {
-  if (!channelId) return broadcastChannels[0];
-  return broadcastChannels.find((channel) => channel.id === channelId) ?? broadcastChannels[0];
+  const publication = getBroadcastPublicationByChannelId(channelId);
+  if (publication) return publicationToChannel(publication);
+  const channels = getBroadcastChannels();
+  if (!channelId) return channels[0];
+  return channels.find((channel) => channel.id === channelId) ?? channels[0];
 }
 
 export function getTdtvLobbySlides(tournaments: Tournament[]): TdtvLoopSlide[] {
@@ -417,6 +611,12 @@ export function getTournamentScheduleState(tournament: Tournament): { startsAt: 
 
 export function deriveBroadcastChannelsFromTournaments(tournaments: Tournament[]): BroadcastChannel[] {
   const safeTournaments = Array.isArray(tournaments) ? tournaments : [];
+  const publications = getBroadcastPublications();
+  const publicationByTournamentId = new Map(
+    publications
+      .filter((publication) => publication.tournamentId)
+      .map((publication) => [publication.tournamentId, publication] as const)
+  );
   const lobbySlides = getTdtvLobbySlides(safeTournaments);
   const loopChannel: BroadcastChannel = {
     id: TDTV_LOOP_CHANNEL_ID,
@@ -476,7 +676,7 @@ export function deriveBroadcastChannelsFromTournaments(tournaments: Tournament[]
             ? 'UP_NEXT'
             : 'STANDBY';
 
-    return {
+    const computedChannel: BroadcastChannel = {
       id: tournament.id,
       number: String(index + 1).padStart(2, '0'),
       name: tournament.name || `Table ${index + 1}`,
@@ -493,7 +693,33 @@ export function deriveBroadcastChannelsFromTournaments(tournaments: Tournament[]
       watching: 128 + index * 21,
       players: safePlayers
     };
+
+    const publication = publicationByTournamentId.get(tournament.id);
+    if (!publication) {
+      return computedChannel;
+    }
+
+    return {
+      ...computedChannel,
+      id: publication.channelId,
+      number: publication.channelNumber,
+      name: publication.channelName,
+      status: publication.status,
+      now: publication.now,
+      next: publication.next,
+      route: `/tdtv/channel/${publication.channelId}`,
+      venue: publication.venue,
+      location: publication.location,
+      format: publication.format,
+      round: publication.round,
+      players: publication.players
+    };
   });
 
-  return [loopChannel, ...tournamentChannels];
+  const knownTournamentIds = new Set(safeTournaments.map((tournament) => tournament.id));
+  const orphanPublicationChannels = publications
+    .filter((publication) => !publication.tournamentId || !knownTournamentIds.has(publication.tournamentId))
+    .map((publication) => publicationToChannel(publication));
+
+  return [loopChannel, ...tournamentChannels, ...orphanPublicationChannels];
 }
