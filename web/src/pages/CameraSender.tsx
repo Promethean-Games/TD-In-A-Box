@@ -467,39 +467,41 @@ export default function CameraSender() {
 
   const handleSignalMessage = async (message: PairSignalMessage) => {
     if (message.from !== 'host') return;
-    if (message.sessionId && hostSessionIdRef.current && message.sessionId !== hostSessionIdRef.current) {
-      return;
-    }
-    if (message.sessionId && !hostSessionIdRef.current && (message.type === 'offer' || message.type === 'ice')) {
+
+    if (message.sessionId) {
+      if (hostSessionIdRef.current && message.sessionId !== hostSessionIdRef.current) {
+        return;
+      }
       hostSessionIdRef.current = message.sessionId;
     }
+
     const peer = peerRef.current;
     const signalClient = signalClientRef.current;
     if (!peer || !signalClient) return;
     try {
       if (message.type === 'offer') {
-        if (message.sessionId) {
-          hostSessionIdRef.current = message.sessionId;
-        }
         const offer = message.payload as RTCSessionDescriptionInit;
-        if (peer.signalingState !== 'stable' || peer.remoteDescription) {
+        if (!message.sessionId || message.sessionId !== hostSessionIdRef.current) {
           return;
         }
-        if (!message.sessionId || message.sessionId !== hostSessionIdRef.current) {
+        if (peer.signalingState !== 'stable' || peer.remoteDescription) {
           return;
         }
         await peer.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
-        await signalClient.send({ type: 'answer', from: 'sender', payload: answer, ts: Date.now(), sessionId: senderSessionIdRef.current });
+        await signalClient.send({
+          type: 'answer',
+          from: 'sender',
+          payload: answer,
+          ts: Date.now(),
+          sessionId: senderSessionIdRef.current || hostSessionIdRef.current
+        });
         setStatus('Answer sent. Finishing connection...');
         await flushPendingIceCandidates(peer);
         return;
       }
       if (message.type === 'ice' && message.payload) {
-        if (message.sessionId && hostSessionIdRef.current && message.sessionId !== hostSessionIdRef.current) {
-          return;
-        }
         const candidate = message.payload as RTCIceCandidateInit;
         if (peer.remoteDescription) {
           await peer.addIceCandidate(new RTCIceCandidate(candidate));
@@ -509,9 +511,6 @@ export default function CameraSender() {
         return;
       }
       if (message.type === 'stop') {
-        if (message.sessionId && hostSessionIdRef.current && message.sessionId !== hostSessionIdRef.current) {
-          return;
-        }
         manualStopRef.current = true;
         await stopSession(false);
       }
