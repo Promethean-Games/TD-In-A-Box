@@ -1395,6 +1395,83 @@ export default function Tournament() {
     setSignalTransport(null);
   };
 
+  async function prepareHostPairingSession(nextPairCode: string) {
+    const existingSignalClient = pairSignalClientRef.current;
+    if (existingSignalClient && pairPeerRef.current && cameraPairCode === nextPairCode) {
+      return;
+    }
+
+    await stopPairingSession(false);
+    hostIceSentLoggedRef.current = false;
+    senderIceReceivedLoggedRef.current = false;
+    reportHostConnectionEvent('pair-code-generated', 'Host generated new pair code.', 'INFO', nextPairCode);
+    const signalClient = await createPairSignalClient(nextPairCode, handleIncomingPairSignal);
+    pairSignalClientRef.current = signalClient;
+    setSignalTransport(signalClient.transport);
+    reportHostConnectionEvent('signal-client-ready', `Signal client ready using ${signalClient.transport}.`, 'INFO', nextPairCode);
+
+    const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+    pairPeerRef.current = peer;
+    peer.ontrack = (event) => {
+      const incomingStream = event.streams?.[0] ?? new MediaStream();
+      if (!event.streams?.[0] && event.track) {
+        incomingStream.addTrack(event.track);
+      }
+      if (!incomingStream.getTracks().length) return;
+      stopActiveCameraStream();
+      activeCameraStreamRef.current = incomingStream;
+      setActivePreviewStream(incomingStream);
+      setCameraConnectionState('CONNECTED');
+      markCameraConnected('remote-phone');
+      openTableAssignmentPrompt('remote-phone');
+      setCameraStatusNote('QR-paired phone camera connected.');
+      reportHostConnectionEvent('host-ontrack', 'Host received remote media track and activated preview.', 'INFO', nextPairCode);
+    };
+    peer.onicecandidate = (event) => {
+      if (!event.candidate || !pairSignalClientRef.current) return;
+      void pairSignalClientRef.current.send({
+        type: 'ice',
+        from: 'host',
+        payload: event.candidate.toJSON(),
+        ts: Date.now()
+      });
+      if (!hostIceSentLoggedRef.current) {
+        hostIceSentLoggedRef.current = true;
+        reportHostConnectionEvent('host-ice-sent', 'Host sent ICE candidate(s) to sender.', 'INFO', nextPairCode);
+      }
+    };
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === 'connected') {
+        setCameraPairStatus('Paired and streaming.');
+        setCameraConnectionState('CONNECTED');
+        setCameraStatusNote('Remote camera connected and streaming.');
+        offerInFlightRef.current = false;
+        reportHostConnectionEvent('host-peer-connected', 'Host WebRTC peer reached connected state.', 'INFO', nextPairCode);
+      } else if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
+        setCameraPairStatus(`Pairing ${peer.connectionState}.`);
+        setCameraConnectionState('DISCONNECTED');
+        setCameraStatusNote('Remote camera connection stalled. Try reconnecting.');
+        offerInFlightRef.current = false;
+        reportHostConnectionEvent(
+          'host-peer-stalled',
+          `Host peer connection state is ${peer.connectionState}.`,
+          'WARN',
+          nextPairCode
+        );
+      }
+    };
+
+    setCameraPairCode(nextPairCode);
+    setCameraPairStatus('Waiting for phone to scan the QR code...');
+    setCameraStatusNote('QR code ready for phone camera pairing.');
+    reportHostConnectionEvent('host-waiting-sender', 'Host is waiting for sender ready signal.', 'INFO', nextPairCode);
+    setCameraSourceId('remote-phone');
+    updateBroadcastConfig((current) => ({
+      ...current,
+      cameraId: 'remote-phone'
+    }));
+  }
+
   const handleIncomingPairSignal = async (message: PairSignalMessage) => {
     console.debug('[tdtv-host] signal message received', message, {
       hasPeer: Boolean(pairPeerRef.current),
@@ -1405,7 +1482,14 @@ export default function Tournament() {
     const peer = pairPeerRef.current;
     const signalClient = pairSignalClientRef.current;
     if (!peer || !signalClient) {
-      console.warn('[tdtv-host] signal message arrived before peer/signal client were ready', message);
+      const activePairCode = cameraPairCode || generatePairCode();
+      reportHostConnectionEvent(
+        'sender-signal-without-session',
+        'Sender signal arrived without an active host pairing session; recovering the session.',
+        'WARN',
+        activePairCode
+      );
+      await prepareHostPairingSession(activePairCode);
       return;
     }
 
@@ -1526,77 +1610,8 @@ export default function Tournament() {
 
     try {
       stopActiveCameraStream();
-      await stopPairingSession(false);
-
       const nextPairCode = generatePairCode();
-      hostIceSentLoggedRef.current = false;
-      senderIceReceivedLoggedRef.current = false;
-      reportHostConnectionEvent('pair-code-generated', 'Host generated new pair code.', 'INFO', nextPairCode);
-      const signalClient = await createPairSignalClient(nextPairCode, handleIncomingPairSignal);
-      pairSignalClientRef.current = signalClient;
-      setSignalTransport(signalClient.transport);
-      reportHostConnectionEvent('signal-client-ready', `Signal client ready using ${signalClient.transport}.`, 'INFO', nextPairCode);
-
-      const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
-      pairPeerRef.current = peer;
-      peer.ontrack = (event) => {
-        const incomingStream = event.streams?.[0] ?? new MediaStream();
-        if (!event.streams?.[0] && event.track) {
-          incomingStream.addTrack(event.track);
-        }
-        if (!incomingStream.getTracks().length) return;
-        stopActiveCameraStream();
-        activeCameraStreamRef.current = incomingStream;
-        setActivePreviewStream(incomingStream);
-        setCameraConnectionState('CONNECTED');
-        markCameraConnected('remote-phone');
-        openTableAssignmentPrompt('remote-phone');
-        setCameraStatusNote('QR-paired phone camera connected.');
-        reportHostConnectionEvent('host-ontrack', 'Host received remote media track and activated preview.', 'INFO', nextPairCode);
-      };
-      peer.onicecandidate = (event) => {
-        if (!event.candidate || !pairSignalClientRef.current) return;
-        void pairSignalClientRef.current.send({
-          type: 'ice',
-          from: 'host',
-          payload: event.candidate.toJSON(),
-          ts: Date.now()
-        });
-        if (!hostIceSentLoggedRef.current) {
-          hostIceSentLoggedRef.current = true;
-          reportHostConnectionEvent('host-ice-sent', 'Host sent ICE candidate(s) to sender.', 'INFO', nextPairCode);
-        }
-      };
-      peer.onconnectionstatechange = () => {
-        if (peer.connectionState === 'connected') {
-          setCameraPairStatus('Paired and streaming.');
-          setCameraConnectionState('CONNECTED');
-          setCameraStatusNote('Remote camera connected and streaming.');
-          offerInFlightRef.current = false;
-          reportHostConnectionEvent('host-peer-connected', 'Host WebRTC peer reached connected state.', 'INFO', nextPairCode);
-        } else if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
-          setCameraPairStatus(`Pairing ${peer.connectionState}.`);
-          setCameraConnectionState('DISCONNECTED');
-          setCameraStatusNote('Remote camera connection stalled. Try reconnecting.');
-          offerInFlightRef.current = false;
-          reportHostConnectionEvent(
-            'host-peer-stalled',
-            `Host peer connection state is ${peer.connectionState}.`,
-            'WARN',
-            nextPairCode
-          );
-        }
-      };
-
-      setCameraPairCode(nextPairCode);
-      setCameraPairStatus('Waiting for phone to scan the QR code...');
-      setCameraStatusNote('QR code ready for phone camera pairing.');
-      reportHostConnectionEvent('host-waiting-sender', 'Host is waiting for sender ready signal.', 'INFO', nextPairCode);
-      setCameraSourceId('remote-phone');
-      updateBroadcastConfig((current) => ({
-        ...current,
-        cameraId: 'remote-phone'
-      }));
+      await prepareHostPairingSession(nextPairCode);
     } catch (error) {
       offerInFlightRef.current = false;
       reportHostConnectionEvent(
