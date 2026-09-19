@@ -243,7 +243,6 @@ class CameraSenderService : Service() {
         hasLoggedInboundIce = false
         hasLoggedOutboundIce = false
         activePairCode = pairCode
-        activeSessionId = java.util.UUID.randomUUID().toString()
         activeHostSessionId = null
         reconnectJob?.cancel()
         logConnectionReport(
@@ -280,6 +279,7 @@ class CameraSenderService : Service() {
 
         try {
             shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
+            activeSessionId = java.util.UUID.randomUUID().toString()
             val track = startLocalVideoCapture()
             val rtcPeer = createPeerConnection()
             peerConnection = rtcPeer
