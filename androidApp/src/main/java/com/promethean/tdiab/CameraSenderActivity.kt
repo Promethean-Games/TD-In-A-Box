@@ -87,6 +87,7 @@ class CameraSenderActivity : ComponentActivity() {
     private lateinit var sharedPreferences: SharedPreferences
     private var senderBinder: CameraSenderService.LocalBinder? = null
     private var binderCollectionJob: Job? = null
+    private var isServiceBound = false
     private var localStatusText by mutableStateOf("Idle")
     private var localErrorText by mutableStateOf<String?>(null)
     private var serviceUiState by mutableStateOf(SenderUiState())
@@ -96,6 +97,7 @@ class CameraSenderActivity : ComponentActivity() {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as? CameraSenderService.LocalBinder ?: return
             senderBinder = binder
+            isServiceBound = true
             binderCollectionJob?.cancel()
             binderCollectionJob = lifecycleScope.launch {
                 binder.uiState.collect { nextState ->
@@ -111,6 +113,7 @@ class CameraSenderActivity : ComponentActivity() {
             binderCollectionJob?.cancel()
             binderCollectionJob = null
             senderBinder = null
+            isServiceBound = false
         }
     }
 
@@ -162,17 +165,26 @@ class CameraSenderActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        bindService(
-            Intent(this, CameraSenderService::class.java),
-            serviceConnection,
-            Context.BIND_AUTO_CREATE
-        )
+        if (!isServiceBound) {
+            val bound = bindService(
+                Intent(this, CameraSenderService::class.java),
+                serviceConnection,
+                Context.BIND_AUTO_CREATE
+            )
+            isServiceBound = bound
+            if (!bound) {
+                localStatusText = "Camera service unavailable"
+            }
+        }
     }
 
     override fun onStop() {
         binderCollectionJob?.cancel()
         binderCollectionJob = null
-        runCatching { unbindService(serviceConnection) }
+        if (isServiceBound) {
+            runCatching { unbindService(serviceConnection) }
+            isServiceBound = false
+        }
         senderBinder = null
         super.onStop()
     }
