@@ -63,6 +63,7 @@ import {
   createPairSignalClient,
   DEFAULT_ICE_SERVERS,
   generatePairCode,
+  generatePairSessionId,
   getPairSignalDiagnostics,
   type PairSignalClient,
   type PairSignalMessage
@@ -199,6 +200,8 @@ export default function Tournament() {
   const activeCameraStreamRef = useRef<MediaStream | null>(null);
   const pairSignalClientRef = useRef<PairSignalClient | null>(null);
   const pairPeerRef = useRef<RTCPeerConnection | null>(null);
+  const activeHostSessionIdRef = useRef<string>('');
+  const activeSenderSessionIdRef = useRef<string>('');
   const offerInFlightRef = useRef(false);
   const hostIceSentLoggedRef = useRef(false);
   const senderIceReceivedLoggedRef = useRef(false);
@@ -1372,13 +1375,15 @@ export default function Tournament() {
     const signalClient = pairSignalClientRef.current;
     if (notifySender && signalClient) {
       try {
-        await signalClient.send({ type: 'stop', from: 'host', ts: Date.now() });
+        await signalClient.send({ type: 'stop', from: 'host', ts: Date.now(), sessionId: activeHostSessionIdRef.current });
       } catch {
         // ignore final signal errors while tearing down local state
       }
     }
     signalClient?.close();
     pairSignalClientRef.current = null;
+    activeHostSessionIdRef.current = '';
+    activeSenderSessionIdRef.current = '';
     offerInFlightRef.current = false;
     hostIceSentLoggedRef.current = false;
     senderIceReceivedLoggedRef.current = false;
@@ -1402,6 +1407,8 @@ export default function Tournament() {
     }
 
     await stopPairingSession(false);
+    activeHostSessionIdRef.current = generatePairSessionId();
+    activeSenderSessionIdRef.current = '';
     hostIceSentLoggedRef.current = false;
     senderIceReceivedLoggedRef.current = false;
     reportHostConnectionEvent('pair-code-generated', 'Host generated new pair code.', 'INFO', nextPairCode);
@@ -1433,7 +1440,8 @@ export default function Tournament() {
         type: 'ice',
         from: 'host',
         payload: event.candidate.toJSON(),
-        ts: Date.now()
+        ts: Date.now(),
+        sessionId: activeHostSessionIdRef.current
       });
       if (!hostIceSentLoggedRef.current) {
         hostIceSentLoggedRef.current = true;
@@ -1479,6 +1487,18 @@ export default function Tournament() {
       pairCode: cameraPairCode
     });
     if (message.from !== 'sender') return;
+    if (message.sessionId && activeSenderSessionIdRef.current && message.sessionId !== activeSenderSessionIdRef.current) {
+      reportHostConnectionEvent(
+        'sender-session-stale',
+        `Ignoring stale sender session ${message.sessionId}. Active session is ${activeSenderSessionIdRef.current}.`,
+        'WARN',
+        cameraPairCode || 'pending'
+      );
+      return;
+    }
+    if (message.sessionId && !activeSenderSessionIdRef.current && message.type === 'ready') {
+      activeSenderSessionIdRef.current = message.sessionId;
+    }
     const peer = pairPeerRef.current;
     const signalClient = pairSignalClientRef.current;
     if (!peer || !signalClient) {
@@ -1495,13 +1515,17 @@ export default function Tournament() {
 
     try {
       if (message.type === 'ready') {
+        if (message.sessionId) {
+          activeSenderSessionIdRef.current = message.sessionId;
+        }
         reportHostConnectionEvent('sender-ready-received', 'Sender ready signal received by host.');
         if (peer.localDescription?.type === 'offer' && peer.signalingState === 'have-local-offer') {
           await signalClient.send({
             type: 'offer',
             from: 'host',
             payload: peer.localDescription.toJSON(),
-            ts: Date.now()
+            ts: Date.now(),
+            sessionId: activeHostSessionIdRef.current
           });
           reportHostConnectionEvent('offer-resent', 'Re-sent existing local offer after sender ready.');
           return;
@@ -1519,13 +1543,16 @@ export default function Tournament() {
         });
         await peer.setLocalDescription(offer);
         reportHostConnectionEvent('offer-local-description-set', 'Host local offer description set.');
-        await signalClient.send({ type: 'offer', from: 'host', payload: offer, ts: Date.now() });
+        await signalClient.send({ type: 'offer', from: 'host', payload: offer, ts: Date.now(), sessionId: activeHostSessionIdRef.current });
         reportHostConnectionEvent('offer-sent', 'Host offer sent to sender.');
         offerInFlightRef.current = false;
         return;
       }
       if (message.type === 'answer' && message.payload) {
         reportHostConnectionEvent('answer-received', 'Host received answer from sender.');
+        if (message.sessionId) {
+          activeSenderSessionIdRef.current = message.sessionId;
+        }
         const answer = message.payload as RTCSessionDescriptionInit;
         if (peer.signalingState === 'stable' && peer.remoteDescription) {
           setCameraPairStatus('Remote camera linked.');

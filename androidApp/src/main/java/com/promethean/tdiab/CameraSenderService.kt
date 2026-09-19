@@ -86,6 +86,8 @@ class CameraSenderService : Service() {
     private var hasLoggedInboundIce = false
     private var hasLoggedOutboundIce = false
     private var activePairCode: String? = null
+    private var activeSessionId: String? = null
+    private var activeHostSessionId: String? = null
 
     private var powerWakeLock: PowerManager.WakeLock? = null
     private var peerConnectionFactory: PeerConnectionFactory? = null
@@ -232,6 +234,8 @@ class CameraSenderService : Service() {
         hasLoggedInboundIce = false
         hasLoggedOutboundIce = false
         activePairCode = pairCode
+        activeSessionId = java.util.UUID.randomUUID().toString()
+        activeHostSessionId = null
         reconnectJob?.cancel()
         logConnectionReport(
             stage = "connect-requested",
@@ -388,6 +392,7 @@ class CameraSenderService : Service() {
                                 type = "ice",
                                 from = "sender",
                                 ts = System.currentTimeMillis(),
+                                sessionId = activeSessionId,
                                 payload = buildJsonObject {
                                     put("candidate", candidate.sdp)
                                     candidate.sdpMid?.let { put("sdpMid", it) } ?: put("sdpMid", JsonNull)
@@ -450,12 +455,18 @@ class CameraSenderService : Service() {
 
     private suspend fun handleSignalMessage(message: PairSignalMessagePayload) {
         if (message.from != "host") return
+        if (message.sessionId != null && activeHostSessionId != null && message.sessionId != activeHostSessionId) {
+            return
+        }
         val rtcPeer = peerConnection ?: return
         val currentSignalClient = signalClient ?: return
         val pairCode = activePairCode.orEmpty()
 
         when (message.type) {
             "offer" -> {
+                if (message.sessionId != null) {
+                    activeHostSessionId = message.sessionId
+                }
                 if (rtcPeer.signalingState() != PeerConnection.SignalingState.STABLE || rtcPeer.remoteDescription != null) {
                     return
                 }
@@ -513,6 +524,7 @@ class CameraSenderService : Service() {
                                 type = "answer",
                                 from = "sender",
                                 ts = System.currentTimeMillis(),
+                                sessionId = activeSessionId,
                                 payload = buildJsonObject {
                                     put("type", answer.type.canonicalForm())
                                     put("sdp", answer.description)
@@ -556,6 +568,9 @@ class CameraSenderService : Service() {
                         detail = "Host ICE candidates are being received.",
                         pairCode = pairCode
                     )
+                }
+                if (message.sessionId != null) {
+                    activeHostSessionId = message.sessionId
                 }
                 if (rtcPeer.remoteDescription != null) {
                     rtcPeer.addIceCandidate(candidate)
@@ -637,6 +652,8 @@ class CameraSenderService : Service() {
         hasReceivedHostOffer = false
         hasLoggedInboundIce = false
         hasLoggedOutboundIce = false
+        activeSessionId = null
+        activeHostSessionId = null
         reconnectJob?.cancel()
         reconnectJob = null
 
@@ -648,7 +665,8 @@ class CameraSenderService : Service() {
                     PairSignalMessagePayload(
                         type = "stop",
                         from = "sender",
-                        ts = System.currentTimeMillis()
+                        ts = System.currentTimeMillis(),
+                        sessionId = activeSessionId
                     )
                 )
             }
@@ -831,7 +849,8 @@ class CameraSenderService : Service() {
                     PairSignalMessagePayload(
                         type = "ready",
                         from = "sender",
-                        ts = System.currentTimeMillis()
+                        ts = System.currentTimeMillis(),
+                        sessionId = activeSessionId
                     )
                 )
                 announceCount += 1

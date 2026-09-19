@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import {
   createPairSignalClient,
   DEFAULT_ICE_SERVERS,
+  generatePairSessionId,
   getPairSignalDiagnostics,
   getPairingAvailabilityError,
   type PairSignalClient,
@@ -154,6 +155,8 @@ export default function CameraSender() {
   const guideRef = useRef<HTMLDivElement | null>(null);
   const advancedRef = useRef<HTMLDivElement | null>(null);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const senderSessionIdRef = useRef('');
+  const hostSessionIdRef = useRef('');
   const manualStopRef = useRef(false);
   const hasActivatedSessionRef = useRef(false);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -292,13 +295,15 @@ export default function CameraSender() {
     const signalClient = signalClientRef.current;
     if (notifyHost && signalClient) {
       try {
-        await signalClient.send({ type: 'stop', from: 'sender', ts: Date.now() });
+        await signalClient.send({ type: 'stop', from: 'sender', ts: Date.now(), sessionId: senderSessionIdRef.current });
       } catch {
         // ignore teardown signal errors while closing the session
       }
     }
     signalClient?.close();
     signalClientRef.current = null;
+    senderSessionIdRef.current = '';
+    hostSessionIdRef.current = '';
     const peer = peerRef.current;
     if (peer) {
       peer.close();
@@ -462,11 +467,20 @@ export default function CameraSender() {
 
   const handleSignalMessage = async (message: PairSignalMessage) => {
     if (message.from !== 'host') return;
+    if (message.sessionId && hostSessionIdRef.current && message.sessionId !== hostSessionIdRef.current) {
+      return;
+    }
+    if (message.sessionId && !hostSessionIdRef.current && (message.type === 'offer' || message.type === 'ice')) {
+      hostSessionIdRef.current = message.sessionId;
+    }
     const peer = peerRef.current;
     const signalClient = signalClientRef.current;
     if (!peer || !signalClient) return;
     try {
       if (message.type === 'offer') {
+        if (message.sessionId) {
+          hostSessionIdRef.current = message.sessionId;
+        }
         const offer = message.payload as RTCSessionDescriptionInit;
         if (peer.signalingState !== 'stable' || peer.remoteDescription) {
           return;
@@ -474,7 +488,7 @@ export default function CameraSender() {
         await peer.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
-        await signalClient.send({ type: 'answer', from: 'sender', payload: answer, ts: Date.now() });
+        await signalClient.send({ type: 'answer', from: 'sender', payload: answer, ts: Date.now(), sessionId: senderSessionIdRef.current });
         setStatus('Answer sent. Finishing connection...');
         await flushPendingIceCandidates(peer);
         return;
@@ -546,6 +560,7 @@ export default function CameraSender() {
         }
       }
 
+      senderSessionIdRef.current = generatePairSessionId();
       const signalClient = await createPairSignalClient(nextPairCode, handleSignalMessage);
       signalClientRef.current = signalClient;
       setSignalTransport(signalClient.transport);
@@ -559,7 +574,8 @@ export default function CameraSender() {
           type: 'ice',
           from: 'sender',
           payload: event.candidate.toJSON(),
-          ts: Date.now()
+          ts: Date.now(),
+          sessionId: senderSessionIdRef.current
         });
       };
       peer.onconnectionstatechange = () => {
@@ -603,7 +619,7 @@ export default function CameraSender() {
 
       const sendReadySignal = async (attempt: number) => {
         try {
-          await signalClient.send({ type: 'ready', from: 'sender', ts: Date.now() });
+          await signalClient.send({ type: 'ready', from: 'sender', ts: Date.now(), sessionId: senderSessionIdRef.current });
         } catch {
           // silent retry on transport issues
         }

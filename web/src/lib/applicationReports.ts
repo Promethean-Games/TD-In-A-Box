@@ -25,6 +25,8 @@ export interface ApplicationReport {
 }
 
 const APPLICATION_REPORTS_KEY = 'tdiab_application_reports';
+const REPORT_QUERY_LIMIT = 1000;
+const MAX_STORED_REPORTS = 1000;
 
 function normalizeReport(report: Partial<ApplicationReport> & Record<string, unknown>): ApplicationReport {
   const fallbackId = globalThis.crypto?.randomUUID?.() ?? `report-${Date.now()}`;
@@ -59,7 +61,7 @@ export async function listApplicationReports(): Promise<ApplicationReport[]> {
       .from('application_reports')
       .select('*')
       .order('occurred_at', { ascending: false })
-      .limit(100);
+      .limit(REPORT_QUERY_LIMIT);
 
     if (error) {
       const detailSuffix = error.details ? ` (${error.details})` : '';
@@ -123,5 +125,5 @@ export async function createApplicationReport(
       return [] as ApplicationReport[];
     }
   })();
-  persistApplicationReports([normalized, ...existing].slice(0, 200));
+  persistApplicationReports([normalized, ...existing].slice(0, MAX_STORED_REPORTS));
 }

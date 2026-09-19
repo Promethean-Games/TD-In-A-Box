@@ -28,7 +28,8 @@ data class PairSignalMessagePayload(
     val type: String,
     val from: String,
     val payload: JsonElement? = null,
-    val ts: Long
+    val ts: Long,
+    val sessionId: String? = null
 )
 
 @Serializable

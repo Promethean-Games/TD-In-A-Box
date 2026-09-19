@@ -7,6 +7,15 @@ export interface PairSignalMessage {
   from: PairRole;
   payload?: unknown;
   ts: number;
+  sessionId?: string;
+}
+
+export function generatePairSessionId(): string {
+  const cryptoObject = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto : null;
+  if (cryptoObject && typeof cryptoObject.randomUUID === 'function') {
+    return cryptoObject.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export interface PairSignalClient {
