@@ -21,6 +21,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -139,60 +140,59 @@ class NativePairSignalClient(
     private fun extractSignalPayload(element: JsonElement?): JsonElement? {
         if (element == null) return null
 
-        val candidates = mutableListOf<JsonElement>()
-        fun addIfPresent(candidate: JsonElement?) {
-            if (candidate != null && candidate !is kotlinx.serialization.json.JsonNull) {
-                candidates += candidate
+        val queue = ArrayDeque<JsonElement>()
+        queue.add(element)
+
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            val currentObject = current as? JsonObject ?: continue
+            val typeName = currentObject["type"]?.jsonPrimitive?.content
+            val fromName = currentObject["from"]?.jsonPrimitive?.content
+            val hasSignalShape = typeName in setOf("ready", "offer", "answer", "ice", "stop", "error") || !fromName.isNullOrBlank()
+            val hasPayload = currentObject["payload"] != null || currentObject["ts"] != null || currentObject["message"] != null
+
+            if (hasSignalShape && hasPayload) {
+                return currentObject
             }
-        }
 
-        val root = element as? JsonObject ?: return element
-        addIfPresent(root)
-        addIfPresent(root["message"])
-        addIfPresent(root["payload"])
-        addIfPresent((root["payload"] as? JsonObject)?.get("message"))
-        addIfPresent((root["payload"] as? JsonObject)?.get("payload"))
-        addIfPresent((root["message"] as? JsonObject)?.get("payload"))
-
-        for (candidate in candidates) {
-            val candidateObject = candidate as? JsonObject ?: continue
-            val typeName = candidateObject["type"]?.jsonPrimitive?.content
-            val fromName = candidateObject["from"]?.jsonPrimitive?.content
-            val tsValue = candidateObject["ts"]
-            if (typeName in setOf("ready", "offer", "answer", "ice", "stop", "error") || !fromName.isNullOrBlank()) {
-                if (tsValue != null || candidateObject["payload"] != null) {
-                    return candidate
+            currentObject.values.forEach { value ->
+                if (value != null && value !is kotlinx.serialization.json.JsonNull) {
+                    queue.add(value)
                 }
             }
         }
 
-        return root["message"] ?: root["payload"] ?: root
+        return element
     }
 
     private fun decodeSignalMessage(rawPayload: JsonElement?): PairSignalMessagePayload? {
         if (rawPayload == null) return null
-        val candidateRoot = rawPayload as? JsonObject ?: return null
-        val shims = listOf(
-            candidateRoot,
-            candidateRoot["message"],
-            candidateRoot["payload"],
-            (candidateRoot["payload"] as? JsonObject)?.get("message"),
-            (candidateRoot["payload"] as? JsonObject)?.get("payload"),
-            (candidateRoot["message"] as? JsonObject)?.get("payload")
-        )
 
-        for (candidate in shims) {
-            val objectCandidate = candidate as? JsonObject ?: continue
+        val queue = ArrayDeque<JsonElement>()
+        queue.add(rawPayload)
+
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            val objectCandidate = current as? JsonObject ?: continue
             val typeName = objectCandidate["type"]?.jsonPrimitive?.content
             val fromName = objectCandidate["from"]?.jsonPrimitive?.content
+
             if (typeName in setOf("ready", "offer", "answer", "ice", "stop", "error") || !fromName.isNullOrBlank()) {
-                return try {
+                val normalized = try {
                     json.decodeFromJsonElement(PairSignalMessagePayload.serializer(), objectCandidate)
                 } catch (_: Throwable) {
                     null
                 }
+                if (normalized != null) return normalized
+            }
+
+            objectCandidate.values.forEach { value ->
+                if (value != null && value !is kotlinx.serialization.json.JsonNull) {
+                    queue.add(value)
+                }
             }
         }
+
         return null
     }
 
