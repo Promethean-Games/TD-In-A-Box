@@ -64,17 +64,33 @@ export function getPairingAvailabilityError(): string | null {
 function unwrapSignalEnvelope(payload: unknown): PairSignalMessage | null {
   if (!payload || typeof payload !== 'object') return null;
 
-  const candidate = payload as Record<string, unknown>;
-  if (typeof candidate.type === 'string' && ['ready', 'offer', 'answer', 'ice', 'stop', 'error'].includes(candidate.type)) {
-    return candidate as PairSignalMessage;
-  }
+  const queue: unknown[] = [payload];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
 
-  const nestedCandidates = [candidate.message, candidate.payload, (candidate.payload as Record<string, unknown> | undefined)?.message, (candidate.payload as Record<string, unknown> | undefined)?.payload];
-  for (const nested of nestedCandidates) {
-    if (!nested || typeof nested !== 'object') continue;
-    const typed = nested as Record<string, unknown>;
-    if (typeof typed.type === 'string' && ['ready', 'offer', 'answer', 'ice', 'stop', 'error'].includes(typed.type)) {
-      return typed as PairSignalMessage;
+    if (typeof current === 'string') {
+      const trimmed = current.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          queue.push(JSON.parse(trimmed));
+        } catch {
+          // ignore string fragments that are not JSON
+        }
+      }
+      continue;
+    }
+
+    if (typeof current !== 'object') continue;
+
+    const candidate = current as Record<string, unknown>;
+    if (typeof candidate.type === 'string' && ['ready', 'offer', 'answer', 'ice', 'stop', 'error'].includes(candidate.type)) {
+      return candidate as PairSignalMessage;
+    }
+
+    const values = Object.values(candidate);
+    for (const value of values) {
+      queue.push(value);
     }
   }
 
