@@ -125,7 +125,7 @@ class CameraSenderService : Service() {
                 val nextPairCode = intent.getStringExtra(EXTRA_PAIR_CODE)?.trim()?.uppercase().orEmpty()
                 if (nextPairCode.isNotBlank()) {
                     serviceScope.launch {
-                        connect(nextPairCode)
+                        connect(nextPairCode, source = "service-intent")
                     }
                 }
             }
@@ -157,7 +157,7 @@ class CameraSenderService : Service() {
 
         fun connect(pairCode: String) {
             serviceScope.launch {
-                this@CameraSenderService.connect(pairCode)
+                this@CameraSenderService.connect(pairCode, source = "binder")
             }
         }
 
@@ -221,7 +221,7 @@ class CameraSenderService : Service() {
         }
     }
 
-    private suspend fun connect(pairCode: String) {
+    private suspend fun connect(pairCode: String, source: String) {
         val currentState = _uiState.value.connectionState
         val hasLinkedSessionForPair = activePairCode == pairCode &&
             signalClient != null &&
@@ -229,7 +229,7 @@ class CameraSenderService : Service() {
         if (hasLinkedSessionForPair) {
             logConnectionReport(
                 stage = "connect-ignored-linked-session",
-                detail = "Ignored connect request because this pair code already has an active linked sender session.",
+                detail = "Ignored connect request from $source because this pair code already has an active linked sender session.",
                 severity = "WARN",
                 pairCode = pairCode
             )
@@ -241,7 +241,7 @@ class CameraSenderService : Service() {
         ) {
             logConnectionReport(
                 stage = "connect-ignored-duplicate",
-                detail = "Ignored duplicate connect request while sender was already active for this pair code.",
+                detail = "Ignored duplicate connect request from $source while sender was already active for this pair code.",
                 severity = "WARN",
                 pairCode = pairCode
             )
@@ -273,7 +273,7 @@ class CameraSenderService : Service() {
         reconnectJob?.cancel()
         logConnectionReport(
             stage = "connect-requested",
-            detail = "Connect requested from launcher UI.",
+            detail = "Connect requested from $source.",
             pairCode = pairCode
         )
         initializePeerFactory()
@@ -902,7 +902,7 @@ class CameraSenderService : Service() {
             }
             shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
             if (!manualDisconnect && activePairCode == pairCode) {
-                connect(pairCode)
+                connect(pairCode, source = "auto-reconnect")
             }
         }
     }
