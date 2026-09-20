@@ -1489,10 +1489,20 @@ export default function Tournament() {
       stopActiveCameraStream();
       activeCameraStreamRef.current = incomingStream;
       setActivePreviewStream(incomingStream);
-      setCameraConnectionState('CONNECTED');
-      markCameraConnected('remote-phone');
-      openTableAssignmentPrompt('remote-phone');
-      setCameraStatusNote('QR-paired phone camera connected.');
+      const remoteTrackReady =
+        peer.connectionState === 'connected' ||
+        peer.connectionState === 'completed' ||
+        peer.iceConnectionState === 'connected' ||
+        peer.iceConnectionState === 'completed';
+      if (remoteTrackReady) {
+        setCameraConnectionState('CONNECTED');
+        markCameraConnected('remote-phone');
+        openTableAssignmentPrompt('remote-phone');
+        setCameraStatusNote('QR-paired phone camera connected.');
+      } else {
+        setCameraConnectionState('DISCONNECTED');
+        setCameraStatusNote('Remote track received; waiting for stable ICE connection before marking camera online.');
+      }
       reportHostConnectionEvent('host-ontrack', 'Host received remote media track and activated preview.', 'INFO', nextPairCode);
     };
     peer.onicecandidate = (event) => {
@@ -1765,9 +1775,10 @@ export default function Tournament() {
           }
         }
         pendingIncomingIceCandidatesRef.current = pendingIncomingIceCandidatesRef.current.filter((candidate, index, list) => list.indexOf(candidate) === index);
-        setCameraConnectionState('CONNECTED');
-        setCameraPairStatus('Remote camera linked.');
-        reportHostConnectionEvent('host-linked', 'Host marked connection as linked after answer.');
+        setCameraConnectionState('DISCONNECTED');
+        setCameraPairStatus('Answer received. Waiting for ICE connection to stabilize.');
+        setCameraStatusNote('Remote camera answered; still waiting for final peer connection confirmation.');
+        reportHostConnectionEvent('host-answer-applied', 'Host applied sender answer and is waiting for ICE to settle before marking the camera live.');
         return;
       }
       if (message.type === 'ice' && message.payload) {
