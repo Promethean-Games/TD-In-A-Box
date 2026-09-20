@@ -1677,18 +1677,9 @@ export default function Tournament() {
       activeSenderSessionIdRef.current &&
       message.sessionId !== activeSenderSessionIdRef.current
     ) {
-      if (hostAlreadyLinked) {
-        reportHostConnectionEvent(
-          'sender-ready-ignored-linked',
-          `Ignoring sender ready from new session ${message.sessionId} because host is already linked.`,
-          'WARN',
-          activePairCode
-        );
-        return;
-      }
       reportHostConnectionEvent(
         'sender-session-rollover',
-        `Sender started a new session ${message.sessionId}; replacing prior sender session ${activeSenderSessionIdRef.current}.`,
+        `Sender started a new session ${message.sessionId}; replacing prior sender session ${activeSenderSessionIdRef.current}. Host was ${hostAlreadyLinked ? 'already linked' : 'not linked'}.`,
         'WARN',
         activePairCode
       );
@@ -1725,7 +1716,7 @@ export default function Tournament() {
         if (peer.connectionState === 'connected' || peer.remoteDescription) {
           reportHostConnectionEvent(
             'sender-ready-ignored-linked',
-            'Ignoring sender ready because host is already linked.',
+            'Sender ready received but host is already linked to this session. Continuing active connection.',
             'INFO',
             activePairCode
           );
