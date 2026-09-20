@@ -1694,15 +1694,27 @@ export default function Tournament() {
         activePairCode
       );
       await prepareHostPairingSession(activePairCode, true);
+      return;
     }
     if (message.sessionId && activeSenderSessionIdRef.current && message.sessionId !== activeSenderSessionIdRef.current) {
-      reportHostConnectionEvent(
-        'sender-session-stale',
-        `Ignoring stale sender session ${message.sessionId}. Active session is ${activeSenderSessionIdRef.current}.`,
-        'WARN',
-        activePairCode
-      );
-      return;
+      if (message.type === 'answer' || message.type === 'ice') {
+        const previousSenderSessionId = activeSenderSessionIdRef.current;
+        activeSenderSessionIdRef.current = message.sessionId;
+        reportHostConnectionEvent(
+          'sender-session-refresh',
+          `Adopting refreshed sender session ${message.sessionId} after a sender reconnect. Previous active session was ${previousSenderSessionId}.`,
+          'WARN',
+          activePairCode
+        );
+      } else {
+        reportHostConnectionEvent(
+          'sender-session-stale',
+          `Ignoring stale sender session ${message.sessionId}. Active session is ${activeSenderSessionIdRef.current}.`,
+          'WARN',
+          activePairCode
+        );
+        return;
+      }
     }
     if (message.sessionId && !activeSenderSessionIdRef.current && message.type === 'ready') {
       activeSenderSessionIdRef.current = message.sessionId;
