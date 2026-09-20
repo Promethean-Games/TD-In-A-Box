@@ -1100,6 +1100,21 @@
   letter-spacing: -0.02em;
 }
 
+.admin-application-report__instance {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(91, 211, 255, 0.12);
+  border: 1px solid rgba(91, 211, 255, 0.24);
+  color: #b6ebff;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .admin-application-report__head small {
   color: rgba(220, 232, 245, 0.74);
   font-size: 0.72rem;

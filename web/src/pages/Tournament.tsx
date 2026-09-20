@@ -227,6 +227,7 @@ export default function Tournament() {
   const activeCameraStreamRef = useRef<MediaStream | null>(null);
   const pairSignalClientRef = useRef<PairSignalClient | null>(null);
   const pairPeerRef = useRef<RTCPeerConnection | null>(null);
+  const activePairCodeRef = useRef<string>('');
   const activeHostSessionIdRef = useRef<string>('');
   const activeSenderSessionIdRef = useRef<string>('');
   const offerInFlightRef = useRef(false);
@@ -259,7 +260,7 @@ export default function Tournament() {
 
   const reportHostConnectionEvent = useCallback(
     (stage: string, detail: string, severity: 'INFO' | 'WARN' | 'ERROR' | 'FATAL' = 'INFO', pairCodeOverride?: string) => {
-      const pairCode = pairCodeOverride ?? cameraPairCode ?? 'pending';
+      const pairCode = pairCodeOverride ?? activePairCodeRef.current ?? cameraPairCode ?? 'pending';
       const entry: PairDebugEntry = {
         ts: new Date().toISOString(),
         stage,
@@ -1439,6 +1440,7 @@ export default function Tournament() {
     pairSignalClientRef.current = null;
     activeHostSessionIdRef.current = '';
     activeSenderSessionIdRef.current = '';
+    activePairCodeRef.current = '';
     offerInFlightRef.current = false;
     hostIceSentLoggedRef.current = false;
     senderIceReceivedLoggedRef.current = false;
@@ -1459,11 +1461,12 @@ export default function Tournament() {
 
   async function prepareHostPairingSession(nextPairCode: string) {
     const existingSignalClient = pairSignalClientRef.current;
-    if (existingSignalClient && pairPeerRef.current && cameraPairCode === nextPairCode) {
+    if (existingSignalClient && pairPeerRef.current && activePairCodeRef.current === nextPairCode) {
       return;
     }
 
     await stopPairingSession(false);
+    activePairCodeRef.current = nextPairCode;
     activeHostSessionIdRef.current = generatePairSessionId();
     activeSenderSessionIdRef.current = '';
     hostIceSentLoggedRef.current = false;
@@ -1667,7 +1670,7 @@ export default function Tournament() {
         'sender-session-stale',
         `Ignoring stale sender session ${message.sessionId}. Active session is ${activeSenderSessionIdRef.current}.`,
         'WARN',
-        cameraPairCode || 'pending'
+        activePairCodeRef.current || cameraPairCode || 'pending'
       );
       return;
     }
@@ -1677,7 +1680,7 @@ export default function Tournament() {
     const peer = pairPeerRef.current;
     const signalClient = pairSignalClientRef.current;
     if (!peer || !signalClient) {
-      const activePairCode = cameraPairCode || generatePairCode();
+      const activePairCode = activePairCodeRef.current || cameraPairCode || generatePairCode();
       reportHostConnectionEvent(
         'sender-signal-without-session',
         'Sender signal arrived without an active host pairing session; recovering the session.',
@@ -1695,7 +1698,7 @@ export default function Tournament() {
         }
         reportHostConnectionEvent('sender-ready-received', 'Sender ready signal received by host.');
         setCameraPairStatus('Phone ready. Building secure connection...');
-        await publishHostOffer(cameraPairCode || 'pending', 'resend');
+        await publishHostOffer(activePairCodeRef.current || cameraPairCode || 'pending', 'resend');
         return;
       }
       if (message.type === 'answer' && message.payload) {
@@ -1704,7 +1707,7 @@ export default function Tournament() {
             'answer-session-stale',
             `Ignoring stale sender answer for ${message.sessionId}. Active sender session is ${activeSenderSessionIdRef.current}.`,
             'WARN',
-            cameraPairCode || 'pending'
+            activePairCodeRef.current || cameraPairCode || 'pending'
           );
           return;
         }
@@ -1744,7 +1747,7 @@ export default function Tournament() {
             'sender-ice-session-stale',
             `Ignoring stale sender ICE for ${message.sessionId}. Active sender session is ${activeSenderSessionIdRef.current}.`,
             'WARN',
-            cameraPairCode || 'pending'
+            activePairCodeRef.current || cameraPairCode || 'pending'
           );
           return;
         }

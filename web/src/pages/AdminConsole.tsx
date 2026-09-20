@@ -26,6 +26,8 @@ import { useTournamentStore } from '@/store/tournamentStore';
 import { getAuditLogEntries, recordAuditAction } from '@/lib/audit';
 import {
   formatApplicationReportTimestamp,
+  getApplicationReportInstanceKey,
+  getApplicationReportInstanceLabel,
   listApplicationReports,
   type ApplicationReport
 } from '@/lib/applicationReports';
@@ -196,6 +198,7 @@ export default function AdminConsole() {
   const [applicationReports, setApplicationReports] = useState<ApplicationReport[]>([]);
   const [applicationReportsStatus, setApplicationReportsStatus] = useState<string>('');
   const [applicationReportFilter, setApplicationReportFilter] = useState<'all' | ApplicationReportCategory>('all');
+  const [applicationReportRunFilter, setApplicationReportRunFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [selectedEntity, setSelectedEntity] = useState<AdminEntityRecord | null>(null);
   const [selectedEntityTab, setSelectedEntityTab] = useState<'overview' | 'activity' | 'history' | 'related'>('overview');
@@ -252,12 +255,28 @@ export default function AdminConsole() {
     () => applicationReports.filter((report) => categorizeApplicationReport(report) === 'connection'),
     [applicationReports]
   );
+  const applicationReportRunOptions = useMemo(() => {
+    const counts = new Map<string, { label: string; count: number }>();
+    applicationReports.forEach((report) => {
+      const key = getApplicationReportInstanceKey(report);
+      const label = getApplicationReportInstanceLabel(report);
+      const current = counts.get(key);
+      counts.set(key, { label: current?.label ?? label, count: (current?.count ?? 0) + 1 });
+    });
+    return Array.from(counts.entries())
+      .map(([key, value]) => ({ key, label: value.label, count: value.count }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [applicationReports]);
   const filteredApplicationReports = useMemo(() => {
-    if (applicationReportFilter === 'all') {
-      return applicationReports;
+    let reports = applicationReports;
+    if (applicationReportFilter !== 'all') {
+      reports = reports.filter((report) => categorizeApplicationReport(report) === applicationReportFilter);
     }
-    return applicationReports.filter((report) => categorizeApplicationReport(report) === applicationReportFilter);
-  }, [applicationReportFilter, applicationReports]);
+    if (applicationReportRunFilter !== 'all') {
+      reports = reports.filter((report) => getApplicationReportInstanceKey(report) === applicationReportRunFilter);
+    }
+    return reports;
+  }, [applicationReportFilter, applicationReportRunFilter, applicationReports]);
 
   const sectionData = useMemo(() => {
     const baseCards = [
@@ -973,6 +992,26 @@ export default function AdminConsole() {
                 </button>
               </div>
 
+              <div className="admin-application-filters" role="tablist" aria-label="Application report run">
+                <button
+                  type="button"
+                  className={`filter-pill ${applicationReportRunFilter === 'all' ? 'is-selected' : ''}`}
+                  onClick={() => setApplicationReportRunFilter('all')}
+                >
+                  All runs
+                </button>
+                {applicationReportRunOptions.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`filter-pill ${applicationReportRunFilter === option.key ? 'is-selected' : ''}`}
+                    onClick={() => setApplicationReportRunFilter(option.key)}
+                  >
+                    {option.label} ({option.count})
+                  </button>
+                ))}
+              </div>
+
               <div className="admin-panel-grid">
                 {sectionData.map((item) => (
                   <article key={`${activeSection}-${item.title}`} className="admin-panel-card">
@@ -996,6 +1035,9 @@ export default function AdminConsole() {
                         <div>
                           <span className={`admin-application-severity admin-application-severity--${report.severity.toLowerCase()}`}>{report.severity}</span>
                           <strong>{report.title}</strong>
+                          <span className="admin-application-report__instance">
+                            {getApplicationReportInstanceLabel(report)}
+                          </span>
                         </div>
                         <small>{formatApplicationReportTimestamp(report.occurred_at)}</small>
                       </div>

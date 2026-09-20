@@ -33,6 +33,35 @@ export function formatApplicationReportTimestamp(occurredAt: string): string {
   return Number.isNaN(parsed.getTime()) ? 'Unknown' : parsed.toLocaleString();
 }
 
+export function getApplicationReportInstanceKey(report: Pick<ApplicationReport, 'source' | 'file_path' | 'stack_trace'>): string {
+  const blob = `${report.file_path}\n${report.stack_trace}\n${report.source}`;
+  const pairCodeMatch =
+    blob.match(/pairCode=([A-Z0-9]+)/i) ??
+    blob.match(/host:([A-Z0-9]+)/i) ??
+    blob.match(/pair:([A-Z0-9]+)/i);
+
+  if (pairCodeMatch?.[1]) {
+    return `pair:${pairCodeMatch[1].toUpperCase()}`;
+  }
+
+  if (report.source.toLowerCase().includes('connection')) {
+    return `connection:${report.source}`;
+  }
+
+  return `report:${report.source}`;
+}
+
+export function getApplicationReportInstanceLabel(report: Pick<ApplicationReport, 'source' | 'file_path' | 'stack_trace'>): string {
+  const key = getApplicationReportInstanceKey(report);
+  if (key.startsWith('pair:')) {
+    return `Run ${key.slice(5)}`;
+  }
+  if (report.source.toLowerCase().includes('connection')) {
+    return 'Unpaired connection report';
+  }
+  return 'Crash report';
+}
+
 export function normalizeApplicationReport(
   report: Partial<ApplicationReport> & Record<string, unknown>,
   occurredAtFallback = ''
