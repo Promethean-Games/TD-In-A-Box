@@ -675,6 +675,7 @@ class CameraSenderService : Service() {
                                 put("sdp", answer.description)
                             }
                         )
+                        runCatching { drainPendingIce(rtcPeer) }
                         applyLocalDescriptionAndSendAnswer(
                             rtcPeer = rtcPeer,
                             signalClient = currentSignalClient,
@@ -707,7 +708,16 @@ class CameraSenderService : Service() {
                         )
                     }
                     if (rtcPeer.remoteDescription != null) {
-                        rtcPeer.addIceCandidate(candidate)
+                        runCatching { rtcPeer.addIceCandidate(candidate) }
+                            .onFailure { error ->
+                                logConnectionReport(
+                                    stage = "host-ice-apply-failed",
+                                    detail = error.message ?: "Failed to apply remote ICE candidate.",
+                                    severity = "WARN",
+                                    pairCode = pairCode
+                                )
+                                pendingRemoteIce += candidate
+                            }
                     } else {
                         pendingRemoteIce += candidate
                     }
@@ -766,6 +776,7 @@ class CameraSenderService : Service() {
                             )
                             if (callbackHandled.compareAndSet(false, true)) {
                                 serviceScope.launch {
+                                    runCatching { drainPendingIce(rtcPeer) }
                                     logConnectionReport(
                                         stage = "local-description-set",
                                         detail = "Local answer applied successfully.",

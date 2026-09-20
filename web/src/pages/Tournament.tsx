@@ -1761,10 +1761,10 @@ export default function Tournament() {
           try {
             await peer.addIceCandidate(new RTCIceCandidate(candidate));
           } catch {
-            // retry later if the answer has not fully settled yet
+            pendingIncomingIceCandidatesRef.current.push(candidate);
           }
         }
-        pendingIncomingIceCandidatesRef.current = [];
+        pendingIncomingIceCandidatesRef.current = pendingIncomingIceCandidatesRef.current.filter((candidate, index, list) => list.indexOf(candidate) === index);
         setCameraConnectionState('CONNECTED');
         setCameraPairStatus('Remote camera linked.');
         reportHostConnectionEvent('host-linked', 'Host marked connection as linked after answer.');
