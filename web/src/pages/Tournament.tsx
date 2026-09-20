@@ -1665,12 +1665,27 @@ export default function Tournament() {
       pairCode: cameraPairCode
     });
     if (message.from !== 'sender') return;
+    const activePairCode = activePairCodeRef.current || cameraPairCode || 'pending';
+    if (
+      message.type === 'ready' &&
+      message.sessionId &&
+      activeSenderSessionIdRef.current &&
+      message.sessionId !== activeSenderSessionIdRef.current
+    ) {
+      reportHostConnectionEvent(
+        'sender-session-rollover',
+        `Sender started a new session ${message.sessionId}; replacing prior sender session ${activeSenderSessionIdRef.current}.`,
+        'WARN',
+        activePairCode
+      );
+      await prepareHostPairingSession(activePairCode);
+    }
     if (message.sessionId && activeSenderSessionIdRef.current && message.sessionId !== activeSenderSessionIdRef.current) {
       reportHostConnectionEvent(
         'sender-session-stale',
         `Ignoring stale sender session ${message.sessionId}. Active session is ${activeSenderSessionIdRef.current}.`,
         'WARN',
-        activePairCodeRef.current || cameraPairCode || 'pending'
+        activePairCode
       );
       return;
     }
