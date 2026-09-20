@@ -84,6 +84,24 @@ const SEEDING_OPTIONS: { value: TournamentSeedMode; label: string }[] = [
 
 type WorkflowTab = 'ROSTER' | 'PAYOUTS' | 'BRACKET' | 'BROADCAST';
 type CameraInputMode = 'QR' | 'USB' | 'NETWORK';
+type PairDebugSeverity = 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
+
+interface PairDebugEntry {
+  ts: string;
+  stage: string;
+  detail: string;
+  severity: PairDebugSeverity;
+  pairCode: string;
+}
+
+interface PairDebugSnapshot {
+  peerConnectionState: string;
+  signalingState: string;
+  iceConnectionState: string;
+  iceGatheringState: string;
+  hostSessionId: string;
+  senderSessionId: string;
+}
 
 const WORKFLOW_TABS = [
   { value: 'ROSTER', label: 'Roster', detail: 'Players', icon: Users },
@@ -184,6 +202,15 @@ export default function Tournament() {
   const [cameraPairCode, setCameraPairCode] = useState('');
   const [cameraPairQrDataUrl, setCameraPairQrDataUrl] = useState('');
   const [cameraPairStatus, setCameraPairStatus] = useState('Not paired');
+  const [pairDebugEntries, setPairDebugEntries] = useState<PairDebugEntry[]>([]);
+  const [pairDebugSnapshot, setPairDebugSnapshot] = useState<PairDebugSnapshot>({
+    peerConnectionState: 'none',
+    signalingState: 'none',
+    iceConnectionState: 'none',
+    iceGatheringState: 'none',
+    hostSessionId: 'none',
+    senderSessionId: 'none'
+  });
   const [activePreviewStream, setActivePreviewStream] = useState<MediaStream | null>(null);
   const [signalTransport, setSignalTransport] = useState<'supabase' | 'broadcast-channel' | null>(null);
   const [networkCameraName, setNetworkCameraName] = useState('Network Camera');
@@ -218,9 +245,28 @@ export default function Tournament() {
     [cameraPairCode]
   );
 
+  const syncPairDebugSnapshot = useCallback(() => {
+    const peer = pairPeerRef.current;
+    setPairDebugSnapshot({
+      peerConnectionState: peer?.connectionState ?? 'none',
+      signalingState: peer?.signalingState ?? 'none',
+      iceConnectionState: peer?.iceConnectionState ?? 'none',
+      iceGatheringState: peer?.iceGatheringState ?? 'none',
+      hostSessionId: activeHostSessionIdRef.current || 'none',
+      senderSessionId: activeSenderSessionIdRef.current || 'none'
+    });
+  }, []);
+
   const reportHostConnectionEvent = useCallback(
     (stage: string, detail: string, severity: 'INFO' | 'WARN' | 'ERROR' | 'FATAL' = 'INFO', pairCodeOverride?: string) => {
       const pairCode = pairCodeOverride ?? cameraPairCode ?? 'pending';
+      const entry: PairDebugEntry = {
+        ts: new Date().toISOString(),
+        stage,
+        detail,
+        severity,
+        pairCode
+      };
       void createApplicationReport({
         occurred_at: new Date().toISOString(),
         source: 'web-host-connection',
@@ -243,8 +289,10 @@ export default function Tournament() {
         file_path: `host:${pairCode}`,
         upload_status: 'synced'
       });
+      setPairDebugEntries((current) => [...current.slice(-9), entry]);
+      syncPairDebugSnapshot();
     },
-    [cameraPairCode]
+    [cameraPairCode, syncPairDebugSnapshot]
   );
 
   const handleSelectCameraInputMode = (nextMode: CameraInputMode) => {
@@ -1405,6 +1453,8 @@ export default function Tournament() {
     setCameraPairCode('');
     setCameraPairStatus('Not paired');
     setSignalTransport(null);
+    setPairDebugEntries([]);
+    syncPairDebugSnapshot();
   };
 
   async function prepareHostPairingSession(nextPairCode: string) {
@@ -1426,6 +1476,7 @@ export default function Tournament() {
 
     const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
     pairPeerRef.current = peer;
+    syncPairDebugSnapshot();
     peer.ontrack = (event) => {
       const incomingStream = event.streams?.[0] ?? new MediaStream();
       if (!event.streams?.[0] && event.track) {
@@ -1456,6 +1507,7 @@ export default function Tournament() {
       }
     };
     peer.onconnectionstatechange = () => {
+      syncPairDebugSnapshot();
       if (peer.connectionState === 'connected') {
         setCameraPairStatus('Paired and streaming.');
         setCameraConnectionState('CONNECTED');
@@ -1474,6 +1526,18 @@ export default function Tournament() {
           nextPairCode
         );
       }
+    };
+    peer.oniceconnectionstatechange = () => {
+      syncPairDebugSnapshot();
+      reportHostConnectionEvent(
+        'host-ice-state',
+        `Host ICE state is ${peer.iceConnectionState}.`,
+        peer.iceConnectionState === 'failed' ? 'WARN' : 'INFO',
+        nextPairCode
+      );
+    };
+    peer.onicegatheringstatechange = () => {
+      syncPairDebugSnapshot();
     };
 
     setCameraPairCode(nextPairCode);
@@ -2906,6 +2970,47 @@ export default function Tournament() {
                                       Pairing cannot complete without Supabase signaling or a supported browser BroadcastChannel.
                                     </small>
                                   ) : null}
+                                  <div className="camera-pairing-debug camera-pairing-debug--live">
+                                    <strong>Live connection trace</strong>
+                                    <div className="camera-pairing-debug-grid">
+                                      <div>
+                                        <span>Peer state</span>
+                                        <strong>{pairDebugSnapshot.peerConnectionState}</strong>
+                                      </div>
+                                      <div>
+                                        <span>Signaling</span>
+                                        <strong>{pairDebugSnapshot.signalingState}</strong>
+                                      </div>
+                                      <div>
+                                        <span>ICE state</span>
+                                        <strong>{pairDebugSnapshot.iceConnectionState}</strong>
+                                      </div>
+                                      <div>
+                                        <span>Gathering</span>
+                                        <strong>{pairDebugSnapshot.iceGatheringState}</strong>
+                                      </div>
+                                      <div>
+                                        <span>Host session</span>
+                                        <strong>{pairDebugSnapshot.hostSessionId}</strong>
+                                      </div>
+                                      <div>
+                                        <span>Sender session</span>
+                                        <strong>{pairDebugSnapshot.senderSessionId}</strong>
+                                      </div>
+                                    </div>
+                                    <ul className="camera-pairing-debug-trace">
+                                      {pairDebugEntries.length === 0 ? (
+                                        <li>No live events yet.</li>
+                                      ) : (
+                                        pairDebugEntries.slice().reverse().map((entry) => (
+                                          <li key={`${entry.ts}-${entry.stage}`}>
+                                            <strong>[{entry.severity}] {entry.stage}</strong>
+                                            <span>{entry.detail}</span>
+                                          </li>
+                                        ))
+                                      )}
+                                    </ul>
+                                  </div>
                                 </div>
                               </div>
                             ) : (
@@ -2934,6 +3039,47 @@ export default function Tournament() {
                                     Pairing cannot complete without Supabase signaling or a supported browser BroadcastChannel.
                                   </small>
                                 ) : null}
+                                <div className="camera-pairing-debug camera-pairing-debug--live">
+                                  <strong>Live connection trace</strong>
+                                  <div className="camera-pairing-debug-grid">
+                                    <div>
+                                      <span>Peer state</span>
+                                      <strong>{pairDebugSnapshot.peerConnectionState}</strong>
+                                    </div>
+                                    <div>
+                                      <span>Signaling</span>
+                                      <strong>{pairDebugSnapshot.signalingState}</strong>
+                                    </div>
+                                    <div>
+                                      <span>ICE state</span>
+                                      <strong>{pairDebugSnapshot.iceConnectionState}</strong>
+                                    </div>
+                                    <div>
+                                      <span>Gathering</span>
+                                      <strong>{pairDebugSnapshot.iceGatheringState}</strong>
+                                    </div>
+                                    <div>
+                                      <span>Host session</span>
+                                      <strong>{pairDebugSnapshot.hostSessionId}</strong>
+                                    </div>
+                                    <div>
+                                      <span>Sender session</span>
+                                      <strong>{pairDebugSnapshot.senderSessionId}</strong>
+                                    </div>
+                                  </div>
+                                  <ul className="camera-pairing-debug-trace">
+                                    {pairDebugEntries.length === 0 ? (
+                                      <li>No live events yet.</li>
+                                    ) : (
+                                      pairDebugEntries.slice().reverse().map((entry) => (
+                                        <li key={`${entry.ts}-${entry.stage}`}>
+                                          <strong>[{entry.severity}] {entry.stage}</strong>
+                                          <span>{entry.detail}</span>
+                                        </li>
+                                      ))
+                                    )}
+                                  </ul>
+                                </div>
                               </div>
                             )}
                           </div>

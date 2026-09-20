@@ -442,6 +442,11 @@ class CameraSenderService : Service() {
                 }
 
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+                    logConnectionReport(
+                        stage = "ice-connection-state",
+                        detail = "ICE connection state changed to ${state.name.lowercase()}.",
+                        severity = if (state == PeerConnection.IceConnectionState.FAILED) "WARN" else "INFO"
+                    )
                     if ((state == PeerConnection.IceConnectionState.FAILED || state == PeerConnection.IceConnectionState.DISCONNECTED) && !manualDisconnect) {
                         scheduleReconnect("ICE ${state.name.lowercase()}.")
                     }

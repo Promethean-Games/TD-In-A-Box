@@ -1863,6 +1863,36 @@
   word-break: break-word;
 }
 
+.camera-pairing-debug-trace {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.camera-pairing-debug-trace li {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(8, 15, 26, 0.9);
+}
+
+.camera-pairing-debug-trace li strong {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.camera-pairing-debug-trace li span {
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.74);
+}
+
 .broadcast-grid {
   display: grid;
   grid-template-columns: 1fr;
