@@ -444,7 +444,6 @@ class CameraSenderService : Service() {
                             )
                         }
 
-                        PeerConnection.PeerConnectionState.DISCONNECTED,
                         PeerConnection.PeerConnectionState.FAILED -> {
                             if (!manualDisconnect) {
                                 scheduleReconnect("WebRTC connection ${newState.name.lowercase()}.")
@@ -461,7 +460,7 @@ class CameraSenderService : Service() {
                         detail = "ICE connection state changed to ${state.name.lowercase()}.",
                         severity = if (state == PeerConnection.IceConnectionState.FAILED) "WARN" else "INFO"
                     )
-                    if ((state == PeerConnection.IceConnectionState.FAILED || state == PeerConnection.IceConnectionState.DISCONNECTED) && !manualDisconnect) {
+                    if (state == PeerConnection.IceConnectionState.FAILED && !manualDisconnect) {
                         scheduleReconnect("ICE ${state.name.lowercase()}.")
                     }
                 }
