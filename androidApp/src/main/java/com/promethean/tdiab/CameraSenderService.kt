@@ -223,6 +223,18 @@ class CameraSenderService : Service() {
 
     private suspend fun connect(pairCode: String) {
         val currentState = _uiState.value.connectionState
+        val hasLinkedSessionForPair = activePairCode == pairCode &&
+            signalClient != null &&
+            (peerConnection?.remoteDescription != null || hasReceivedHostOffer)
+        if (hasLinkedSessionForPair) {
+            logConnectionReport(
+                stage = "connect-ignored-linked-session",
+                detail = "Ignored connect request because this pair code already has an active linked sender session.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+            return
+        }
         if (activePairCode == pairCode &&
             signalClient != null &&
             (currentState == SenderConnectionState.CONNECTING || currentState == SenderConnectionState.CONNECTED)
@@ -827,6 +839,17 @@ class CameraSenderService : Service() {
 
     private fun scheduleReconnect(reason: String) {
         val pairCode = activePairCode ?: return
+        val hasLinkedSession = peerConnection?.remoteDescription != null ||
+            _uiState.value.connectionState == SenderConnectionState.CONNECTED
+        if (hasLinkedSession) {
+            logConnectionReport(
+                stage = "reconnect-skipped-linked-session",
+                detail = "Skipped reconnect because sender already has an active linked session.",
+                severity = "INFO",
+                pairCode = pairCode
+            )
+            return
+        }
         val scheduledSessionId = activeSessionId
         logConnectionReport(
             stage = "reconnect-scheduled",
