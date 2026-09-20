@@ -24,7 +24,11 @@ import {
 } from '@/lib/channel';
 import { useTournamentStore } from '@/store/tournamentStore';
 import { getAuditLogEntries, recordAuditAction } from '@/lib/audit';
-import { listApplicationReports, type ApplicationReport } from '@/lib/applicationReports';
+import {
+  formatApplicationReportTimestamp,
+  listApplicationReports,
+  type ApplicationReport
+} from '@/lib/applicationReports';
 import './AdminConsole.css';
 
 type AdminSectionId = 'overview' | 'people' | 'venues' | 'tdtv' | 'events' | 'application' | 'billing' | 'system';
@@ -993,7 +997,7 @@ export default function AdminConsole() {
                           <span className={`admin-application-severity admin-application-severity--${report.severity.toLowerCase()}`}>{report.severity}</span>
                           <strong>{report.title}</strong>
                         </div>
-                        <small>{new Date(report.occurred_at).toLocaleString()}</small>
+                        <small>{formatApplicationReportTimestamp(report.occurred_at)}</small>
                       </div>
                       <div className="admin-application-report__body">
                         <span>{categorizeApplicationReport(report) === 'connection' ? 'Connection report' : 'Crash report'}</span>

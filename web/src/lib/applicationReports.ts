@@ -28,11 +28,22 @@ const APPLICATION_REPORTS_KEY = 'tdiab_application_reports';
 const REPORT_QUERY_LIMIT = 10000;
 const MAX_STORED_REPORTS = 10000;
 
-function normalizeReport(report: Partial<ApplicationReport> & Record<string, unknown>): ApplicationReport {
+export function formatApplicationReportTimestamp(occurredAt: string): string {
+  const parsed = new Date(occurredAt);
+  return Number.isNaN(parsed.getTime()) ? 'Unknown' : parsed.toLocaleString();
+}
+
+export function normalizeApplicationReport(
+  report: Partial<ApplicationReport> & Record<string, unknown>,
+  occurredAtFallback = ''
+): ApplicationReport {
   const fallbackId = globalThis.crypto?.randomUUID?.() ?? `report-${Date.now()}`;
   return {
     id: String(report.id ?? fallbackId),
-    occurred_at: String(report.occurred_at ?? new Date().toISOString()),
+    occurred_at:
+      typeof report.occurred_at === 'string' && report.occurred_at.trim().length > 0
+        ? report.occurred_at
+        : occurredAtFallback,
     source: String(report.source ?? 'android'),
     severity: String(report.severity ?? 'FATAL'),
     title: String(report.title ?? 'Unhandled exception'),
@@ -68,7 +79,7 @@ export async function listApplicationReports(): Promise<ApplicationReport[]> {
       throw new Error(`Supabase reports query failed: ${error.message}${detailSuffix}`);
     }
 
-    return (data ?? []).map((report) => normalizeReport(report as Record<string, unknown>));
+    return (data ?? []).map((report) => normalizeApplicationReport(report as Record<string, unknown>));
   }
 
   if (typeof window === 'undefined') {
@@ -82,7 +93,7 @@ export async function listApplicationReports(): Promise<ApplicationReport[]> {
 
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>[];
-    return Array.isArray(parsed) ? parsed.map((report) => normalizeReport(report)) : [];
+    return Array.isArray(parsed) ? parsed.map((report) => normalizeApplicationReport(report)) : [];
   } catch {
     return [];
   }
@@ -99,7 +110,11 @@ export function persistApplicationReports(reports: ApplicationReport[]): void {
 export async function createApplicationReport(
   report: Partial<ApplicationReport> & Record<string, unknown>
 ): Promise<void> {
-  const normalized = normalizeReport(report);
+  const occurredAt =
+    typeof report.occurred_at === 'string' && report.occurred_at.trim().length > 0
+      ? report.occurred_at
+      : new Date().toISOString();
+  const normalized = normalizeApplicationReport(report, occurredAt);
 
   if (isSupabaseConfigured && supabase) {
     const { error } = await supabase
@@ -120,7 +135,7 @@ export async function createApplicationReport(
     if (!raw) return [] as ApplicationReport[];
     try {
       const parsed = JSON.parse(raw) as Record<string, unknown>[];
-      return Array.isArray(parsed) ? parsed.map((entry) => normalizeReport(entry)) : [];
+      return Array.isArray(parsed) ? parsed.map((entry) => normalizeApplicationReport(entry)) : [];
     } catch {
       return [] as ApplicationReport[];
     }
