@@ -1666,12 +1666,26 @@ export default function Tournament() {
     });
     if (message.from !== 'sender') return;
     const activePairCode = activePairCodeRef.current || cameraPairCode || 'pending';
+    const currentPeer = pairPeerRef.current;
+    const hostAlreadyLinked = Boolean(
+      currentPeer &&
+      (currentPeer.connectionState === 'connected' || currentPeer.remoteDescription)
+    );
     if (
       message.type === 'ready' &&
       message.sessionId &&
       activeSenderSessionIdRef.current &&
       message.sessionId !== activeSenderSessionIdRef.current
     ) {
+      if (hostAlreadyLinked) {
+        reportHostConnectionEvent(
+          'sender-ready-ignored-linked',
+          `Ignoring sender ready from new session ${message.sessionId} because host is already linked.`,
+          'WARN',
+          activePairCode
+        );
+        return;
+      }
       reportHostConnectionEvent(
         'sender-session-rollover',
         `Sender started a new session ${message.sessionId}; replacing prior sender session ${activeSenderSessionIdRef.current}.`,
@@ -1708,6 +1722,15 @@ export default function Tournament() {
 
     try {
       if (message.type === 'ready') {
+        if (peer.connectionState === 'connected' || peer.remoteDescription) {
+          reportHostConnectionEvent(
+            'sender-ready-ignored-linked',
+            'Ignoring sender ready because host is already linked.',
+            'INFO',
+            activePairCode
+          );
+          return;
+        }
         if (message.sessionId) {
           activeSenderSessionIdRef.current = message.sessionId;
         }
