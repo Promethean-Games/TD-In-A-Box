@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useTournamentStore } from '@/store/tournamentStore';
 import { initializeAuth, subscribeToAuthChanges } from '@/lib/auth';
 import { getRuntimeStatus } from '@/lib/runtime';
+import { useTouchClickGuard } from '@/lib/touchClickGuard';
 import Navigation from '@/components/Navigation';
 
 // Pages
@@ -52,35 +53,36 @@ function AppLayout() {
   const location = useLocation();
   const isViewerOnly = location.pathname.startsWith('/tdtv') || location.pathname.startsWith('/camera-link');
   const runtimeStatus = getRuntimeStatus();
+  const touchClickGuard = useTouchClickGuard();
 
   return (
-      <div className="app-shell">
-        {!runtimeStatus.isReady && (
-          <div className="runtime-banner" role="status" aria-live="polite">
-            {runtimeStatus.message}
-          </div>
-        )}
-        {!isViewerOnly && <Navigation />}
-        <main className={`main-content ${isViewerOnly ? 'main-content--viewer' : ''}`}>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-            <Route path="/terms-of-service" element={<TermsOfService />} />
-            <Route path="/account" element={<AccountPage />} />
-            <Route path="/admin" element={<AdminConsole />} />
-            <Route path="/tournaments" element={<Tournaments />} />
-            <Route path="/tournament/new" element={<TournamentSetup />} />
-            <Route path="/tournament/:id" element={<Tournament />} />
-            <Route path="/tournament/:id/workspace" element={<Workspace />} />
-            <Route path="/broadcast/:id" element={<BroadcastView />} />
-            <Route path="/camera-link/:pairCode" element={<CameraSender />} />
-            <Route path="/tv-guide" element={<TvGuide />} />
-            <Route path="/tdtv" element={<TdtvViewer />} />
-            <Route path="/tdtv/channel/:channelId" element={<TdtvViewer />} />
-          </Routes>
-        </main>
-      </div>
+    <div className="app-shell" {...touchClickGuard}>
+      {!runtimeStatus.isReady && (
+        <div className="runtime-banner" role="status" aria-live="polite">
+          {runtimeStatus.message}
+        </div>
+      )}
+      {!isViewerOnly && <Navigation />}
+      <main className={`main-content ${isViewerOnly ? 'main-content--viewer' : ''}`}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+          <Route path="/terms-of-service" element={<TermsOfService />} />
+          <Route path="/account" element={<AccountPage />} />
+          <Route path="/admin" element={<AdminConsole />} />
+          <Route path="/tournaments" element={<Tournaments />} />
+          <Route path="/tournament/new" element={<TournamentSetup />} />
+          <Route path="/tournament/:id" element={<Tournament />} />
+          <Route path="/tournament/:id/workspace" element={<Workspace />} />
+          <Route path="/broadcast/:id" element={<BroadcastView />} />
+          <Route path="/camera-link/:pairCode" element={<CameraSender />} />
+          <Route path="/tv-guide" element={<TvGuide />} />
+          <Route path="/tdtv" element={<TdtvViewer />} />
+          <Route path="/tdtv/channel/:channelId" element={<TdtvViewer />} />
+        </Routes>
+      </main>
+    </div>
   );
 }
 

@@ -638,8 +638,20 @@ class CameraSenderService : Service() {
         }
 
         if (answerToSend != null) {
-            withTimeout(6_000) {
-                currentSignalClient.send(answerToSend)
+            try {
+                withTimeout(6_000) {
+                    currentSignalClient.send(answerToSend)
+                }
+            } catch (error: Throwable) {
+                logConnectionReport(
+                    stage = "answer-send-failed",
+                    detail = error.message ?: "Failed to send answer payload.",
+                    severity = "ERROR",
+                    pairCode = pairCode
+                )
+                if (!manualDisconnect) {
+                    scheduleReconnect("Failed to send answer payload.")
+                }
             }
         }
 
@@ -906,21 +918,34 @@ class CameraSenderService : Service() {
         readyAnnouncementJob = serviceScope.launch {
             var announceCount = 0
             while (!manualDisconnect && !hasReceivedHostOffer && activePairCode == pairCode) {
-                signalClient.send(
-                    PairSignalMessagePayload(
-                        type = "ready",
-                        from = "sender",
-                        ts = System.currentTimeMillis(),
-                        sessionId = activeSessionId
+                try {
+                    signalClient.send(
+                        PairSignalMessagePayload(
+                            type = "ready",
+                            from = "sender",
+                            ts = System.currentTimeMillis(),
+                            sessionId = activeSessionId
+                        )
                     )
-                )
-                announceCount += 1
-                if (announceCount == 1) {
+                    announceCount += 1
+                    if (announceCount == 1) {
+                        logConnectionReport(
+                            stage = "ready-sent",
+                            detail = "Ready signal sent; waiting for host offer.",
+                            pairCode = pairCode
+                        )
+                    }
+                } catch (error: Throwable) {
                     logConnectionReport(
-                        stage = "ready-sent",
-                        detail = "Ready signal sent; waiting for host offer.",
+                        stage = "ready-send-failed",
+                        detail = error.message ?: "Failed to send ready signal.",
+                        severity = "WARN",
                         pairCode = pairCode
                     )
+                    if (!manualDisconnect) {
+                        scheduleReconnect("Failed to send ready signal.")
+                    }
+                    return@launch
                 }
                 delay(2_500)
             }
