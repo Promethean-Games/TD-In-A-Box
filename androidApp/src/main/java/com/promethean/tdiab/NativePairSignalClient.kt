@@ -98,10 +98,15 @@ class NativePairSignalClient(
             payload = buildJsonObject {
                 put("type", "broadcast")
                 put("event", "signal")
-                put("version", 1)
-                put("pairCode", pairCode)
-                put("sessionId", message.sessionId)
-                put("message", json.encodeToJsonElement(PairSignalMessagePayload.serializer(), message))
+                put(
+                    "payload",
+                    buildJsonObject {
+                        put("version", 1)
+                        put("pairCode", pairCode)
+                        put("sessionId", message.sessionId)
+                        put("message", json.encodeToJsonElement(PairSignalMessagePayload.serializer(), message))
+                    }
+                )
             },
             ref = nextRef(),
             joinRef = joinRef

@@ -55,6 +55,7 @@ import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -506,7 +507,6 @@ class CameraSenderService : Service() {
         val rtcPeer = peerConnection ?: return
         val currentSignalClient = signalClient ?: return
         var stopRequested = false
-        var answerToSend: PairSignalMessagePayload? = null
 
         sessionMutex.withLock {
             when (message.type) {
@@ -600,27 +600,7 @@ class CameraSenderService : Service() {
                             detail = "Local answer created; applying local description.",
                             pairCode = pairCode
                         )
-                        val localDescriptionResult = runCatching {
-                            withTimeout(10_000) {
-                                rtcPeer.setLocalDescriptionAwait(answer)
-                            }
-                        }
-                        if (localDescriptionResult.isSuccess) {
-                            logConnectionReport(
-                                stage = "local-description-set",
-                                detail = "Local answer applied successfully.",
-                                pairCode = pairCode
-                            )
-                        } else {
-                            logConnectionReport(
-                                stage = "local-description-failed",
-                                detail = localDescriptionResult.exceptionOrNull()?.message
-                                    ?: "setLocalDescription failed; sending answer payload fallback.",
-                                severity = "WARN",
-                                pairCode = pairCode
-                            )
-                        }
-                        answerToSend = PairSignalMessagePayload(
+                        val answerToSend = PairSignalMessagePayload(
                             type = "answer",
                             from = "sender",
                             ts = System.currentTimeMillis(),
@@ -630,19 +610,13 @@ class CameraSenderService : Service() {
                                 put("sdp", answer.description)
                             }
                         )
-                        updateState(
-                            pairCode = pairCode,
-                            statusText = "Sending answer to host…",
-                            connectionState = SenderConnectionState.CONNECTING,
-                            isStreaming = true,
-                            errorText = null
-                        )
-                        logConnectionReport(
-                            stage = "answer-send-start",
-                            detail = "Local answer prepared; sending payload to host.",
+                        applyLocalDescriptionAndSendAnswer(
+                            rtcPeer = rtcPeer,
+                            signalClient = currentSignalClient,
+                            answer = answer,
+                            answerMessage = answerToSend,
                             pairCode = pairCode
                         )
-                        startPostOfferConnectionTimeout(pairCode)
                     } catch (error: Throwable) {
                         logConnectionReport(
                             stage = "offer-handling-failed",
@@ -686,36 +660,6 @@ class CameraSenderService : Service() {
             }
         }
 
-        if (answerToSend != null) {
-            try {
-                withTimeout(6_000) {
-                    currentSignalClient.send(answerToSend)
-                }
-                updateState(
-                    pairCode = pairCode,
-                    statusText = "Answer sent. Finishing secure connection…",
-                    connectionState = SenderConnectionState.CONNECTING,
-                    isStreaming = true,
-                    errorText = null
-                )
-                logConnectionReport(
-                    stage = "answer-sent",
-                    detail = "Local answer sent to host; waiting for ICE/connection completion.",
-                    pairCode = pairCode
-                )
-            } catch (error: Throwable) {
-                logConnectionReport(
-                    stage = "answer-send-failed",
-                    detail = error.message ?: "Failed to send answer payload.",
-                    severity = "ERROR",
-                    pairCode = pairCode
-                )
-                if (!manualDisconnect) {
-                    scheduleReconnect("Failed to send answer payload.")
-                }
-            }
-        }
-
         if (stopRequested) {
             shutdownSession(notifyStop = false)
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -728,6 +672,147 @@ class CameraSenderService : Service() {
         val queued = pendingRemoteIce.toList()
         pendingRemoteIce.clear()
         queued.forEach { connection.addIceCandidate(it) }
+    }
+
+    private fun applyLocalDescriptionAndSendAnswer(
+        rtcPeer: PeerConnection,
+        signalClient: NativePairSignalClient,
+        answer: SessionDescription,
+        answerMessage: PairSignalMessagePayload,
+        pairCode: String
+    ) {
+        serviceScope.launch(Dispatchers.IO) {
+            val callbackHandled = AtomicBoolean(false)
+            try {
+                logConnectionReport(
+                    stage = "local-description-native-call-start",
+                    detail = "Calling PeerConnection.setLocalDescription with the created local answer.",
+                    pairCode = pairCode
+                )
+                rtcPeer.setLocalDescription(
+                    object : SdpObserver {
+                        override fun onCreateSuccess(sessionDescription: SessionDescription?) = Unit
+
+                        override fun onSetSuccess() {
+                            logConnectionReport(
+                                stage = "local-description-callback-success",
+                                detail = "PeerConnection.setLocalDescription reported success.",
+                                pairCode = pairCode
+                            )
+                            if (callbackHandled.compareAndSet(false, true)) {
+                                serviceScope.launch {
+                                    logConnectionReport(
+                                        stage = "local-description-set",
+                                        detail = "Local answer applied successfully.",
+                                        pairCode = pairCode
+                                    )
+                                    sendAnswerToHost(signalClient, answerMessage, pairCode)
+                                }
+                            }
+                        }
+
+                        override fun onSetFailure(error: String?) {
+                            val detail = error ?: "PeerConnection.setLocalDescription reported failure."
+                            logConnectionReport(
+                                stage = "local-description-callback-failed",
+                                detail = detail,
+                                severity = "ERROR",
+                                pairCode = pairCode
+                            )
+                            if (callbackHandled.compareAndSet(false, true)) {
+                                serviceScope.launch {
+                                    logConnectionReport(
+                                        stage = "local-description-failed",
+                                        detail = detail,
+                                        severity = "WARN",
+                                        pairCode = pairCode
+                                    )
+                                    sendAnswerToHost(signalClient, answerMessage, pairCode)
+                                }
+                            }
+                        }
+
+                        override fun onCreateFailure(error: String?) = Unit
+                    },
+                    answer
+                )
+                logConnectionReport(
+                    stage = "local-description-native-call-returned",
+                    detail = "PeerConnection.setLocalDescription returned control to the coroutine.",
+                    pairCode = pairCode
+                )
+            } catch (error: Throwable) {
+                logConnectionReport(
+                    stage = "local-description-native-call-threw",
+                    detail = error.message ?: "PeerConnection.setLocalDescription threw unexpectedly.",
+                    severity = "ERROR",
+                    pairCode = pairCode
+                )
+                if (callbackHandled.compareAndSet(false, true) && !manualDisconnect) {
+                    serviceScope.launch {
+                        scheduleReconnect("Local answer application failed.")
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun sendAnswerToHost(
+        signalClient: NativePairSignalClient,
+        answerMessage: PairSignalMessagePayload,
+        pairCode: String
+    ) {
+        if (manualDisconnect || activePairCode != pairCode || this.signalClient !== signalClient) {
+            logConnectionReport(
+                stage = "answer-send-skipped-stale",
+                detail = "Skipping answer publish because the sender session is no longer active for this pair code.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+            return
+        }
+
+        updateState(
+            pairCode = pairCode,
+            statusText = "Sending answer to host…",
+            connectionState = SenderConnectionState.CONNECTING,
+            isStreaming = true,
+            errorText = null
+        )
+        logConnectionReport(
+            stage = "answer-send-start",
+            detail = "Local answer prepared; sending payload to host.",
+            pairCode = pairCode
+        )
+        startPostOfferConnectionTimeout(pairCode)
+
+        try {
+            withTimeout(6_000) {
+                signalClient.send(answerMessage)
+            }
+            updateState(
+                pairCode = pairCode,
+                statusText = "Answer sent. Finishing secure connection…",
+                connectionState = SenderConnectionState.CONNECTING,
+                isStreaming = true,
+                errorText = null
+            )
+            logConnectionReport(
+                stage = "answer-sent",
+                detail = "Local answer sent to host; waiting for ICE/connection completion.",
+                pairCode = pairCode
+            )
+        } catch (error: Throwable) {
+            logConnectionReport(
+                stage = "answer-send-failed",
+                detail = error.message ?: "Failed to send answer payload.",
+                severity = "ERROR",
+                pairCode = pairCode
+            )
+            if (!manualDisconnect) {
+                scheduleReconnect("Failed to send answer payload.")
+            }
+        }
     }
 
     private fun scheduleReconnect(reason: String) {
@@ -1116,22 +1201,6 @@ private suspend fun PeerConnection.setRemoteDescriptionAwait(description: Sessio
             override fun onCreateFailure(error: String?) = Unit
             override fun onSetFailure(error: String?) {
                 continuation.resumeWithException(IllegalStateException(error ?: "Remote description failed."))
-            }
-        }, description)
-    }
-}
-
-private suspend fun PeerConnection.setLocalDescriptionAwait(description: SessionDescription) {
-    suspendCancellableCoroutine { continuation ->
-        setLocalDescription(object : SdpObserver {
-            override fun onCreateSuccess(sessionDescription: SessionDescription?) = Unit
-            override fun onSetSuccess() {
-                continuation.resume(Unit)
-            }
-
-            override fun onCreateFailure(error: String?) = Unit
-            override fun onSetFailure(error: String?) {
-                continuation.resumeWithException(IllegalStateException(error ?: "Local description failed."))
             }
         }, description)
     }
