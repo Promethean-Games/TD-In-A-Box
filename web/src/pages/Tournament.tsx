@@ -1459,9 +1459,9 @@ export default function Tournament() {
     syncPairDebugSnapshot();
   };
 
-  async function prepareHostPairingSession(nextPairCode: string) {
+  async function prepareHostPairingSession(nextPairCode: string, forceReset = false) {
     const existingSignalClient = pairSignalClientRef.current;
-    if (existingSignalClient && pairPeerRef.current && activePairCodeRef.current === nextPairCode) {
+    if (!forceReset && existingSignalClient && pairPeerRef.current && activePairCodeRef.current === nextPairCode) {
       return;
     }
 
@@ -1678,7 +1678,7 @@ export default function Tournament() {
         'WARN',
         activePairCode
       );
-      await prepareHostPairingSession(activePairCode);
+      await prepareHostPairingSession(activePairCode, true);
     }
     if (message.sessionId && activeSenderSessionIdRef.current && message.sessionId !== activeSenderSessionIdRef.current) {
       reportHostConnectionEvent(
