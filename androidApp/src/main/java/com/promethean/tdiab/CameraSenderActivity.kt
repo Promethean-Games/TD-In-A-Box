@@ -468,6 +468,7 @@ private fun CameraSenderScreen(
                         AdvancedSection(
                             batteryOptimizationsIgnored = batteryOptimizationsIgnored,
                             pairCode = effectivePairCode,
+                            isConnecting = isConnecting,
                             onRequestBatteryExemption = onRequestBatteryExemption,
                             onReconnect = { onConnect(pairCode) },
                             onDisconnect = onDisconnect
@@ -968,6 +969,7 @@ private fun InfoTile(
 private fun AdvancedSection(
     batteryOptimizationsIgnored: Boolean,
     pairCode: String,
+    isConnecting: Boolean,
     onRequestBatteryExemption: () -> Unit,
     onReconnect: () -> Unit,
     onDisconnect: () -> Unit
@@ -994,6 +996,7 @@ private fun AdvancedSection(
 
         Button(
             onClick = onReconnect,
+            enabled = !isConnecting && pairCode.isNotBlank(),
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF132334))

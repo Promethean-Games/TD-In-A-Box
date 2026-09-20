@@ -221,6 +221,19 @@ class CameraSenderService : Service() {
     }
 
     private suspend fun connect(pairCode: String) {
+        val currentState = _uiState.value.connectionState
+        if (activePairCode == pairCode &&
+            signalClient != null &&
+            (currentState == SenderConnectionState.CONNECTING || currentState == SenderConnectionState.CONNECTED)
+        ) {
+            logConnectionReport(
+                stage = "connect-ignored-duplicate",
+                detail = "Ignored duplicate connect request while sender was already active for this pair code.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+            return
+        }
         if (BuildConfig.SUPABASE_URL.isBlank() || BuildConfig.SUPABASE_ANON_KEY.isBlank()) {
             logConnectionReport(
                 stage = "config-missing",
@@ -535,8 +548,25 @@ class CameraSenderService : Service() {
                             )
                             return@withLock
                         }
-                        withTimeout(10_000) {
-                            rtcPeer.setRemoteDescriptionAwait(SessionDescription(SessionDescription.Type.OFFER, sdp))
+                        logConnectionReport(
+                            stage = "remote-description-start",
+                            detail = "Applying remote host offer to the peer connection.",
+                            pairCode = pairCode
+                        )
+                        val remoteDescriptionResult = runCatching {
+                            withTimeout(10_000) {
+                                rtcPeer.setRemoteDescriptionAwait(SessionDescription(SessionDescription.Type.OFFER, sdp))
+                            }
+                        }
+                        if (remoteDescriptionResult.isFailure) {
+                            logConnectionReport(
+                                stage = "remote-description-failed",
+                                detail = remoteDescriptionResult.exceptionOrNull()?.message
+                                    ?: "Failed to apply remote host offer.",
+                                severity = "ERROR",
+                                pairCode = pairCode
+                            )
+                            return@withLock
                         }
                         logConnectionReport(
                             stage = "remote-description-set",
@@ -544,9 +574,27 @@ class CameraSenderService : Service() {
                             pairCode = pairCode
                         )
                         drainPendingIce(rtcPeer)
-                        val answer = withTimeout(10_000) {
-                            rtcPeer.createAnswerAwait()
+                        logConnectionReport(
+                            stage = "answer-create-start",
+                            detail = "Creating local answer from the applied host offer.",
+                            pairCode = pairCode
+                        )
+                        val answerResult = runCatching {
+                            withTimeout(10_000) {
+                                rtcPeer.createAnswerAwait()
+                            }
                         }
+                        if (answerResult.isFailure) {
+                            logConnectionReport(
+                                stage = "answer-create-failed",
+                                detail = answerResult.exceptionOrNull()?.message
+                                    ?: "Failed to create local answer.",
+                                severity = "ERROR",
+                                pairCode = pairCode
+                            )
+                            return@withLock
+                        }
+                        val answer = answerResult.getOrThrow()
                         logConnectionReport(
                             stage = "answer-created",
                             detail = "Local answer created; applying local description.",
