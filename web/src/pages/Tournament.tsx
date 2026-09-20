@@ -204,6 +204,7 @@ export default function Tournament() {
   const activeSenderSessionIdRef = useRef<string>('');
   const offerInFlightRef = useRef(false);
   const offerTimeoutRef = useRef<number | null>(null);
+  const offerResendLoopRef = useRef<number | null>(null);
   const hostIceSentLoggedRef = useRef(false);
   const senderIceReceivedLoggedRef = useRef(false);
   const liveRelayRef = useRef<HostChannelRelay | null>(null);
@@ -1377,6 +1378,7 @@ export default function Tournament() {
       window.clearTimeout(offerTimeoutRef.current);
       offerTimeoutRef.current = null;
     }
+    stopOfferResendLoop();
     const signalClient = pairSignalClientRef.current;
     if (notifySender && signalClient) {
       try {
@@ -1483,6 +1485,15 @@ export default function Tournament() {
       ...current,
       cameraId: 'remote-phone'
     }));
+    startOfferResendLoop(nextPairCode);
+    void publishHostOffer(nextPairCode, 'initial').catch((error) => {
+      reportHostConnectionEvent(
+        'offer-initial-failed',
+        error instanceof Error ? error.message : 'Failed to create the initial host offer.',
+        'ERROR',
+        nextPairCode
+      );
+    });
   }
 
   const armOfferTimeout = useCallback((pairCode: string) => {
@@ -1504,6 +1515,81 @@ export default function Tournament() {
       await prepareHostPairingSession(pairCode);
     }, 15000);
   }, []);
+
+  const stopOfferResendLoop = useCallback(() => {
+    if (offerResendLoopRef.current !== null) {
+      window.clearInterval(offerResendLoopRef.current);
+      offerResendLoopRef.current = null;
+    }
+  }, []);
+
+  const publishHostOffer = useCallback(async (pairCode: string, reason: 'initial' | 'resend') => {
+    const peer = pairPeerRef.current;
+    const signalClient = pairSignalClientRef.current;
+    if (!peer || !signalClient) return false;
+    if (peer.connectionState === 'connected' || peer.remoteDescription) return false;
+
+    let createdFreshOffer = false;
+    try {
+      let offer = peer.localDescription;
+      if (!offer || offer.type !== 'offer' || peer.signalingState !== 'have-local-offer') {
+        if (offerInFlightRef.current) {
+          reportHostConnectionEvent('offer-skip-inflight', 'Skipped creating a second offer while one is already in-flight.', 'WARN');
+          return false;
+        }
+        offerInFlightRef.current = true;
+        createdFreshOffer = true;
+        if (reason === 'initial') {
+          reportHostConnectionEvent('offer-creating', 'Host is creating offer for sender.');
+        }
+        offer = await peer.createOffer({
+          offerToReceiveAudio: false,
+          offerToReceiveVideo: true
+        });
+        await peer.setLocalDescription(offer);
+        reportHostConnectionEvent('offer-local-description-set', 'Host local offer description set.');
+      }
+
+      await signalClient.send({
+        type: 'offer',
+        from: 'host',
+        payload: peer.localDescription?.toJSON() ?? offer,
+        ts: Date.now(),
+        sessionId: activeHostSessionIdRef.current
+      });
+      reportHostConnectionEvent(
+        reason === 'initial' ? 'offer-sent' : 'offer-resent',
+        reason === 'initial' ? 'Host offer sent to sender.' : 'Re-sent existing local offer while waiting for sender ready.'
+      );
+      armOfferTimeout(pairCode);
+      return true;
+    } finally {
+      if (createdFreshOffer) {
+        offerInFlightRef.current = false;
+      }
+    }
+  }, [armOfferTimeout, reportHostConnectionEvent]);
+
+  const startOfferResendLoop = useCallback((pairCode: string) => {
+    stopOfferResendLoop();
+    offerResendLoopRef.current = window.setInterval(() => {
+      const peer = pairPeerRef.current;
+      const signalClient = pairSignalClientRef.current;
+      if (!peer || !signalClient || peer.connectionState === 'connected' || peer.remoteDescription) {
+        stopOfferResendLoop();
+        return;
+      }
+
+      void publishHostOffer(pairCode, 'resend').catch((error) => {
+        reportHostConnectionEvent(
+          'offer-resend-failed',
+          error instanceof Error ? error.message : 'Failed to resend host offer.',
+          'WARN',
+          pairCode
+        );
+      });
+    }, 2500);
+  }, [publishHostOffer, reportHostConnectionEvent, stopOfferResendLoop]);
 
   const handleIncomingPairSignal = async (message: PairSignalMessage) => {
     console.debug('[tdtv-host] signal message received', message, {
@@ -1544,35 +1630,8 @@ export default function Tournament() {
           activeSenderSessionIdRef.current = message.sessionId;
         }
         reportHostConnectionEvent('sender-ready-received', 'Sender ready signal received by host.');
-        if (peer.localDescription?.type === 'offer' && peer.signalingState === 'have-local-offer') {
-          await signalClient.send({
-            type: 'offer',
-            from: 'host',
-            payload: peer.localDescription.toJSON(),
-            ts: Date.now(),
-            sessionId: activeHostSessionIdRef.current
-          });
-          reportHostConnectionEvent('offer-resent', 'Re-sent existing local offer after sender ready.');
-          armOfferTimeout(cameraPairCode || 'pending');
-          return;
-        }
-        if (offerInFlightRef.current) {
-          reportHostConnectionEvent('offer-skip-inflight', 'Skipped creating a second offer while one is already in-flight.', 'WARN');
-          return;
-        }
-        offerInFlightRef.current = true;
         setCameraPairStatus('Phone ready. Building secure connection...');
-        reportHostConnectionEvent('offer-creating', 'Host is creating offer for sender.');
-        const offer = await peer.createOffer({
-          offerToReceiveAudio: false,
-          offerToReceiveVideo: true
-        });
-        await peer.setLocalDescription(offer);
-        reportHostConnectionEvent('offer-local-description-set', 'Host local offer description set.');
-        await signalClient.send({ type: 'offer', from: 'host', payload: offer, ts: Date.now(), sessionId: activeHostSessionIdRef.current });
-        reportHostConnectionEvent('offer-sent', 'Host offer sent to sender.');
-        armOfferTimeout(cameraPairCode || 'pending');
-        offerInFlightRef.current = false;
+        await publishHostOffer(cameraPairCode || 'pending', 'resend');
         return;
       }
       if (message.type === 'answer' && message.payload) {
@@ -1599,6 +1658,7 @@ export default function Tournament() {
           window.clearTimeout(offerTimeoutRef.current);
           offerTimeoutRef.current = null;
         }
+        stopOfferResendLoop();
         await peer.setRemoteDescription(new RTCSessionDescription(answer));
         reportHostConnectionEvent('answer-remote-description-set', 'Host applied remote answer description.');
         for (const candidate of pendingIncomingIceCandidatesRef.current) {
