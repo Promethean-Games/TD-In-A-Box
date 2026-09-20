@@ -817,6 +817,7 @@ class CameraSenderService : Service() {
 
     private fun scheduleReconnect(reason: String) {
         val pairCode = activePairCode ?: return
+        val scheduledSessionId = activeSessionId
         logConnectionReport(
             stage = "reconnect-scheduled",
             detail = reason,
@@ -833,8 +834,29 @@ class CameraSenderService : Service() {
         )
         updateNotification("Reconnecting native sender…")
         reconnectJob = serviceScope.launch {
-            shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
             delay(1_500)
+            if (manualDisconnect || activePairCode != pairCode) {
+                return@launch
+            }
+            if (scheduledSessionId != null && activeSessionId != scheduledSessionId) {
+                logConnectionReport(
+                    stage = "reconnect-skipped-session-changed",
+                    detail = "Skipped reconnect because a newer sender session became active.",
+                    severity = "INFO",
+                    pairCode = pairCode
+                )
+                return@launch
+            }
+            if (_uiState.value.connectionState == SenderConnectionState.CONNECTED) {
+                logConnectionReport(
+                    stage = "reconnect-skipped-connected",
+                    detail = "Skipped reconnect because sender is already connected.",
+                    severity = "INFO",
+                    pairCode = pairCode
+                )
+                return@launch
+            }
+            shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
             if (!manualDisconnect && activePairCode == pairCode) {
                 connect(pairCode)
             }
