@@ -321,6 +321,7 @@ class CameraSenderService : Service() {
                 onTransportFailure = { reason ->
                     if (manualDisconnect) return@NativePairSignalClient
                     val hasActiveNegotiation = peerConnection?.remoteDescription != null ||
+                        hasReceivedHostOffer ||
                         _uiState.value.connectionState == SenderConnectionState.CONNECTED
                     if (hasActiveNegotiation) {
                         logConnectionReport(
@@ -840,6 +841,7 @@ class CameraSenderService : Service() {
     private fun scheduleReconnect(reason: String) {
         val pairCode = activePairCode ?: return
         val hasLinkedSession = peerConnection?.remoteDescription != null ||
+            hasReceivedHostOffer ||
             _uiState.value.connectionState == SenderConnectionState.CONNECTED
         if (hasLinkedSession) {
             logConnectionReport(
@@ -884,6 +886,15 @@ class CameraSenderService : Service() {
                 logConnectionReport(
                     stage = "reconnect-skipped-connected",
                     detail = "Skipped reconnect because sender is already connected.",
+                    severity = "INFO",
+                    pairCode = pairCode
+                )
+                return@launch
+            }
+            if (hasReceivedHostOffer || peerConnection?.remoteDescription != null) {
+                logConnectionReport(
+                    stage = "reconnect-skipped-negotiated",
+                    detail = "Skipped reconnect because sender already negotiated a host offer.",
                     severity = "INFO",
                     pairCode = pairCode
                 )
