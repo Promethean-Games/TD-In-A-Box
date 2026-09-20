@@ -308,6 +308,17 @@ class CameraSenderService : Service() {
                 onSignalMessage = ::handleSignalMessage,
                 onTransportFailure = { reason ->
                     if (manualDisconnect) return@NativePairSignalClient
+                    val hasActiveNegotiation = peerConnection?.remoteDescription != null ||
+                        _uiState.value.connectionState == SenderConnectionState.CONNECTED
+                    if (hasActiveNegotiation) {
+                        logConnectionReport(
+                            stage = "signal-transport-ignored-linked",
+                            detail = reason ?: "Signaling transport dropped after link; keeping active stream.",
+                            severity = "WARN",
+                            pairCode = pairCode
+                        )
+                        return@NativePairSignalClient
+                    }
                     logConnectionReport(
                         stage = "signal-transport-failure",
                         detail = reason ?: "Signaling transport dropped.",
