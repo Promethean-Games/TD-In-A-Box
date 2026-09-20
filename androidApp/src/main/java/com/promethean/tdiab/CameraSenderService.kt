@@ -552,12 +552,12 @@ class CameraSenderService : Service() {
                             detail = "Local answer created; applying local description.",
                             pairCode = pairCode
                         )
-                        val localDescriptionApplied = runCatching {
+                        val localDescriptionResult = runCatching {
                             withTimeout(10_000) {
                                 rtcPeer.setLocalDescriptionAwait(answer)
                             }
-                        }.isSuccess
-                        if (localDescriptionApplied) {
+                        }
+                        if (localDescriptionResult.isSuccess) {
                             logConnectionReport(
                                 stage = "local-description-set",
                                 detail = "Local answer applied successfully.",
@@ -565,8 +565,9 @@ class CameraSenderService : Service() {
                             )
                         } else {
                             logConnectionReport(
-                                stage = "local-description-timeout",
-                                detail = "setLocalDescription timed out; sending answer payload fallback.",
+                                stage = "local-description-failed",
+                                detail = localDescriptionResult.exceptionOrNull()?.message
+                                    ?: "setLocalDescription failed; sending answer payload fallback.",
                                 severity = "WARN",
                                 pairCode = pairCode
                             )
@@ -583,14 +584,14 @@ class CameraSenderService : Service() {
                         )
                         updateState(
                             pairCode = pairCode,
-                            statusText = "Answer sent. Finishing secure connection…",
+                            statusText = "Sending answer to host…",
                             connectionState = SenderConnectionState.CONNECTING,
                             isStreaming = true,
                             errorText = null
                         )
                         logConnectionReport(
-                            stage = "answer-sent",
-                            detail = "Local answer sent to host; waiting for ICE/connection completion.",
+                            stage = "answer-send-start",
+                            detail = "Local answer prepared; sending payload to host.",
                             pairCode = pairCode
                         )
                         startPostOfferConnectionTimeout(pairCode)
@@ -642,6 +643,18 @@ class CameraSenderService : Service() {
                 withTimeout(6_000) {
                     currentSignalClient.send(answerToSend)
                 }
+                updateState(
+                    pairCode = pairCode,
+                    statusText = "Answer sent. Finishing secure connection…",
+                    connectionState = SenderConnectionState.CONNECTING,
+                    isStreaming = true,
+                    errorText = null
+                )
+                logConnectionReport(
+                    stage = "answer-sent",
+                    detail = "Local answer sent to host; waiting for ICE/connection completion.",
+                    pairCode = pairCode
+                )
             } catch (error: Throwable) {
                 logConnectionReport(
                     stage = "answer-send-failed",
