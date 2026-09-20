@@ -388,20 +388,26 @@ class CameraSenderService : Service() {
         val factory = peerConnectionFactory ?: error("PeerConnectionFactory was not initialized.")
         val eglContext = eglBase?.eglBaseContext ?: error("EGL context unavailable.")
         val capturer = createVideoCapturer() ?: error("No usable Android camera was found.")
-        val helper = SurfaceTextureHelper.create("TDIAB-CameraCapture", eglContext)
-        val source = factory.createVideoSource(false)
-        capturer.initialize(helper, applicationContext, source.capturerObserver)
-        capturer.startCapture(1280, 720, 30)
+        try {
+            val helper = SurfaceTextureHelper.create("TDIAB-CameraCapture", eglContext)
+                ?: error("Failed to create SurfaceTextureHelper.")
+            val source = factory.createVideoSource(false)
+            capturer.initialize(helper, applicationContext, source.capturerObserver)
+            capturer.startCapture(1280, 720, 30)
 
-        val track = factory.createVideoTrack("tdiab-native-camera", source).apply {
-            setEnabled(true)
+            val track = factory.createVideoTrack("tdiab-native-camera", source).apply {
+                setEnabled(true)
+            }
+
+            videoCapturer = capturer
+            surfaceTextureHelper = helper
+            videoSource = source
+            videoTrack = track
+            return track
+        } catch (error: Throwable) {
+            runCatching { capturer.dispose() }
+            throw error
         }
-
-        videoCapturer = capturer
-        surfaceTextureHelper = helper
-        videoSource = source
-        videoTrack = track
-        return track
     }
 
     private fun createVideoCapturer(): CameraVideoCapturer? {
@@ -425,67 +431,103 @@ class CameraSenderService : Service() {
             rtcConfig,
             object : PeerConnection.Observer {
                 override fun onIceCandidate(candidate: IceCandidate) {
-                    val currentSignalClient = signalClient ?: return
-                    if (!hasLoggedOutboundIce) {
-                        hasLoggedOutboundIce = true
-                        logConnectionReport(
-                            stage = "sender-ice-generated",
-                            detail = "Local ICE candidates are being generated and sent."
-                        )
-                    }
-                    serviceScope.launch {
-                        currentSignalClient.send(
-                            PairSignalMessagePayload(
-                                type = "ice",
-                                from = "sender",
-                                ts = System.currentTimeMillis(),
-                                sessionId = activeSessionId,
-                                payload = buildJsonObject {
-                                    put("candidate", candidate.sdp)
-                                    candidate.sdpMid?.let { put("sdpMid", it) } ?: put("sdpMid", JsonNull)
-                                    put("sdpMLineIndex", candidate.sdpMLineIndex)
-                                }
+                    runCatching {
+                        val currentSignalClient = signalClient ?: return@runCatching
+                        if (!hasLoggedOutboundIce) {
+                            hasLoggedOutboundIce = true
+                            logConnectionReport(
+                                stage = "sender-ice-generated",
+                                detail = "Local ICE candidates are being generated and sent."
                             )
+                        }
+                        serviceScope.launch {
+                            runCatching {
+                                currentSignalClient.send(
+                                    PairSignalMessagePayload(
+                                        type = "ice",
+                                        from = "sender",
+                                        ts = System.currentTimeMillis(),
+                                        sessionId = activeSessionId,
+                                        payload = buildJsonObject {
+                                            put("candidate", candidate.sdp)
+                                            candidate.sdpMid?.let { put("sdpMid", it) } ?: put("sdpMid", JsonNull)
+                                            put("sdpMLineIndex", candidate.sdpMLineIndex)
+                                        }
+                                    )
+                                )
+                            }.onFailure { error ->
+                                logConnectionReport(
+                                    stage = "ice-send-failed",
+                                    detail = error.message ?: "Failed to send ICE candidate.",
+                                    severity = "WARN",
+                                    pairCode = activePairCode
+                                )
+                            }
+                        }
+                    }.onFailure { error ->
+                        logConnectionReport(
+                            stage = "ice-callback-crashed",
+                            detail = error.message ?: "Unhandled exception in ICE callback.",
+                            severity = "ERROR",
+                            pairCode = activePairCode
                         )
                     }
                 }
 
                 override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
-                    when (newState) {
-                        PeerConnection.PeerConnectionState.CONNECTED -> {
-                            postOfferConnectionTimeoutJob?.cancel()
-                            postOfferConnectionTimeoutJob = null
-                            logConnectionReport(
-                                stage = "peer-connected",
-                                detail = "WebRTC peer connection reached CONNECTED state."
-                            )
-                            updateState(
-                                pairCode = activePairCode.orEmpty(),
-                                statusText = "Native stream live.",
-                                connectionState = SenderConnectionState.CONNECTED,
-                                isStreaming = true,
-                                errorText = null
-                            )
-                        }
-
-                        PeerConnection.PeerConnectionState.FAILED -> {
-                            if (!manualDisconnect) {
-                                scheduleReconnect("WebRTC connection ${newState.name.lowercase()}.")
+                    runCatching {
+                        when (newState) {
+                            PeerConnection.PeerConnectionState.CONNECTED -> {
+                                postOfferConnectionTimeoutJob?.cancel()
+                                postOfferConnectionTimeoutJob = null
+                                logConnectionReport(
+                                    stage = "peer-connected",
+                                    detail = "WebRTC peer connection reached CONNECTED state."
+                                )
+                                updateState(
+                                    pairCode = activePairCode.orEmpty(),
+                                    statusText = "Native stream live.",
+                                    connectionState = SenderConnectionState.CONNECTED,
+                                    isStreaming = true,
+                                    errorText = null
+                                )
                             }
-                        }
 
-                        else -> Unit
+                            PeerConnection.PeerConnectionState.FAILED -> {
+                                if (!manualDisconnect) {
+                                    scheduleReconnect("WebRTC connection ${newState.name.lowercase()}.")
+                                }
+                            }
+
+                            else -> Unit
+                        }
+                    }.onFailure { error ->
+                        logConnectionReport(
+                            stage = "connection-change-callback-crashed",
+                            detail = error.message ?: "Unhandled exception in connection change callback.",
+                            severity = "ERROR",
+                            pairCode = activePairCode
+                        )
                     }
                 }
 
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                    logConnectionReport(
-                        stage = "ice-connection-state",
-                        detail = "ICE connection state changed to ${state.name.lowercase()}.",
-                        severity = if (state == PeerConnection.IceConnectionState.FAILED) "WARN" else "INFO"
-                    )
-                    if (state == PeerConnection.IceConnectionState.FAILED && !manualDisconnect) {
-                        scheduleReconnect("ICE ${state.name.lowercase()}.")
+                    runCatching {
+                        logConnectionReport(
+                            stage = "ice-connection-state",
+                            detail = "ICE connection state changed to ${state.name.lowercase()}.",
+                            severity = if (state == PeerConnection.IceConnectionState.FAILED) "WARN" else "INFO"
+                        )
+                        if (state == PeerConnection.IceConnectionState.FAILED && !manualDisconnect) {
+                            scheduleReconnect("ICE ${state.name.lowercase()}.")
+                        }
+                    }.onFailure { error ->
+                        logConnectionReport(
+                            stage = "ice-connection-change-callback-crashed",
+                            detail = error.message ?: "Unhandled exception in ICE connection change callback.",
+                            severity = "ERROR",
+                            pairCode = activePairCode
+                        )
                     }
                 }
 
