@@ -1536,14 +1536,14 @@ class CameraSenderService : Service() {
         senderPrefs.edit()
             .putString(KEY_PAIR_CODE, pairCode)
             .putString(KEY_SESSION_ID, sessionId)
-            .apply()
+            .commit()
     }
 
     private fun clearPersistedSession() {
         senderPrefs.edit()
             .remove(KEY_PAIR_CODE)
             .remove(KEY_SESSION_ID)
-            .apply()
+            .commit()
     }
 
     companion object {
