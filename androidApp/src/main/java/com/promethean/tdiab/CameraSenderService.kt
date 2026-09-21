@@ -103,6 +103,7 @@ class CameraSenderService : Service() {
     private var activeHostSessionId: String? = null
     private val connectStartupLock = Any()
     private var startupPairCode: String? = null
+    private var signalTransportRestartJob: Job? = null
 
     private var powerWakeLock: PowerManager.WakeLock? = null
     private var peerConnectionFactory: PeerConnectionFactory? = null
@@ -362,28 +363,7 @@ class CameraSenderService : Service() {
                 pairCode = pairCode,
                 scope = serviceScope,
                 onSignalMessage = ::handleSignalMessage,
-                onTransportFailure = { reason ->
-                    if (manualDisconnect) return@NativePairSignalClient
-                    val hasActiveNegotiation = peerConnection?.remoteDescription != null ||
-                        hasReceivedHostOffer ||
-                        _uiState.value.connectionState == SenderConnectionState.CONNECTED
-                    if (hasActiveNegotiation) {
-                        logConnectionReport(
-                            stage = "signal-transport-ignored-linked",
-                            detail = reason ?: "Signaling transport dropped after link; keeping active stream.",
-                            severity = "WARN",
-                            pairCode = pairCode
-                        )
-                        return@NativePairSignalClient
-                    }
-                    logConnectionReport(
-                        stage = "signal-transport-failure",
-                        detail = reason ?: "Signaling transport dropped.",
-                        severity = "WARN",
-                        pairCode = pairCode
-                    )
-                    scheduleReconnect(reason ?: "Signaling dropped.")
-                }
+                onTransportFailure = ::handleSignalTransportFailure
             )
             signalClient = nextSignalClient
             logConnectionReport(
@@ -427,6 +407,97 @@ class CameraSenderService : Service() {
             )
             shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
             releaseWakeLock()
+        }
+    }
+
+    private fun createSignalClient(pairCode: String): NativePairSignalClient {
+        return NativePairSignalClient(
+            supabaseUrl = BuildConfig.SUPABASE_URL,
+            apiKey = BuildConfig.SUPABASE_ANON_KEY,
+            pairCode = pairCode,
+            scope = serviceScope,
+            onSignalMessage = ::handleSignalMessage,
+            onTransportFailure = ::handleSignalTransportFailure
+        )
+    }
+
+    private fun handleSignalTransportFailure(reason: String?) {
+        if (manualDisconnect) return
+        val pairCode = activePairCode ?: return
+        val detail = reason ?: "Signaling transport dropped."
+        logConnectionReport(
+            stage = "signal-transport-failure",
+            detail = detail,
+            severity = "WARN",
+            pairCode = pairCode
+        )
+        if (signalTransportRestartJob?.isActive == true) {
+            logConnectionReport(
+                stage = "signal-transport-restart-already-running",
+                detail = "A signaling transport restart is already in progress.",
+                severity = "INFO",
+                pairCode = pairCode
+            )
+            return
+        }
+        signalTransportRestartJob = serviceScope.launch(Dispatchers.IO) {
+            try {
+                restartSignalTransport(detail)
+            } finally {
+                signalTransportRestartJob = null
+            }
+        }
+    }
+
+    private suspend fun restartSignalTransport(reason: String) {
+        val pairCode = activePairCode ?: return
+        val sessionId = activeSessionId ?: stickySessionId
+        val previousClient = signalClient
+        if (previousClient == null) {
+            logConnectionReport(
+                stage = "signal-transport-restart-skipped",
+                detail = "Skipping signaling restart because no active signaling client exists.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+            return
+        }
+        logConnectionReport(
+            stage = "signal-transport-restart-start",
+            detail = "$reason Reconnecting signaling without changing sender session ${sessionId ?: "none"}.",
+            severity = "WARN",
+            pairCode = pairCode
+        )
+        readyAnnouncementJob?.cancel()
+        readyAnnouncementJob = null
+        val replacementClient = createSignalClient(pairCode)
+        signalClient = replacementClient
+        runCatching { previousClient.close() }
+        if (manualDisconnect || activePairCode != pairCode) {
+            return
+        }
+        try {
+            withContext(Dispatchers.IO) {
+                replacementClient.connect()
+            }
+            logConnectionReport(
+                stage = "signal-transport-restart-complete",
+                detail = "Signaling transport restored for sender session ${sessionId ?: "none"}.",
+                pairCode = pairCode
+            )
+            if (!hasReceivedHostOffer) {
+                startReadyAnnouncements(replacementClient, pairCode)
+            }
+        } catch (error: Throwable) {
+            logConnectionReport(
+                stage = "signal-transport-restart-failed",
+                detail = error.message ?: "Failed to restart signaling transport.",
+                severity = "ERROR",
+                pairCode = pairCode
+            )
+            if (!manualDisconnect) {
+                scheduleReconnect("Failed to restart signaling transport.")
+            }
         }
     }
 
@@ -960,7 +1031,8 @@ class CameraSenderService : Service() {
         answerMessage: PairSignalMessagePayload,
         pairCode: String
     ) {
-        if (manualDisconnect || activePairCode != pairCode || this.signalClient !== signalClient) {
+        val transportClient = this.signalClient ?: signalClient
+        if (manualDisconnect || activePairCode != pairCode) {
             logConnectionReport(
                 stage = "answer-send-skipped-stale",
                 detail = "Skipping answer publish because the sender session is no longer active for this pair code.",
@@ -995,7 +1067,7 @@ class CameraSenderService : Service() {
 
         try {
             withTimeout(6_000) {
-                signalClient.send(answerMessage)
+                transportClient.send(answerMessage)
             }
             logConnectionReport(
                 stage = "answer-sent",
@@ -1144,6 +1216,8 @@ class CameraSenderService : Service() {
             activeHostSessionId = null
             reconnectJob?.cancel()
             reconnectJob = null
+            signalTransportRestartJob?.cancel()
+            signalTransportRestartJob = null
 
             currentSignalClient = signalClient
             signalClient = null
