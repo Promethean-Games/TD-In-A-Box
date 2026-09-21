@@ -64,7 +64,6 @@ import {
   DEFAULT_ICE_SERVERS,
   generatePairCode,
   generatePairSessionId,
-  getPairSignalDiagnostics,
   type PairSignalClient,
   type PairSignalMessage
 } from '@/lib/webrtcPairing';
@@ -84,24 +83,6 @@ const SEEDING_OPTIONS: { value: TournamentSeedMode; label: string }[] = [
 
 type WorkflowTab = 'ROSTER' | 'PAYOUTS' | 'BRACKET' | 'BROADCAST';
 type CameraInputMode = 'QR' | 'USB' | 'NETWORK';
-type PairDebugSeverity = 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
-
-interface PairDebugEntry {
-  ts: string;
-  stage: string;
-  detail: string;
-  severity: PairDebugSeverity;
-  pairCode: string;
-}
-
-interface PairDebugSnapshot {
-  peerConnectionState: string;
-  signalingState: string;
-  iceConnectionState: string;
-  iceGatheringState: string;
-  hostSessionId: string;
-  senderSessionId: string;
-}
 
 const WORKFLOW_TABS = [
   { value: 'ROSTER', label: 'Roster', detail: 'Players', icon: Users },
@@ -202,17 +183,7 @@ export default function Tournament() {
   const [cameraPairCode, setCameraPairCode] = useState('');
   const [cameraPairQrDataUrl, setCameraPairQrDataUrl] = useState('');
   const [cameraPairStatus, setCameraPairStatus] = useState('Not paired');
-  const [pairDebugEntries, setPairDebugEntries] = useState<PairDebugEntry[]>([]);
-  const [pairDebugSnapshot, setPairDebugSnapshot] = useState<PairDebugSnapshot>({
-    peerConnectionState: 'none',
-    signalingState: 'none',
-    iceConnectionState: 'none',
-    iceGatheringState: 'none',
-    hostSessionId: 'none',
-    senderSessionId: 'none'
-  });
   const [activePreviewStream, setActivePreviewStream] = useState<MediaStream | null>(null);
-  const [signalTransport, setSignalTransport] = useState<'supabase' | 'broadcast-channel' | null>(null);
   const [networkCameraName, setNetworkCameraName] = useState('Network Camera');
   const [networkCameraUrl, setNetworkCameraUrl] = useState('');
   const [pendingCameraTable, setPendingCameraTable] = useState(1);
@@ -244,33 +215,10 @@ export default function Tournament() {
   const matchCarouselCardRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const matchCarouselFrameRef = useRef<number | null>(null);
   const cameraPairUrl = cameraPairCode ? getAppRouteUrl(`/camera-link/${cameraPairCode}`) : '';
-  const pairDiagnostics = useMemo(
-    () => getPairSignalDiagnostics(cameraPairCode || 'pending'),
-    [cameraPairCode]
-  );
-
-  const syncPairDebugSnapshot = useCallback(() => {
-    const peer = pairPeerRef.current;
-    setPairDebugSnapshot({
-      peerConnectionState: peer?.connectionState ?? 'none',
-      signalingState: peer?.signalingState ?? 'none',
-      iceConnectionState: peer?.iceConnectionState ?? 'none',
-      iceGatheringState: peer?.iceGatheringState ?? 'none',
-      hostSessionId: activeHostSessionIdRef.current || 'none',
-      senderSessionId: activeSenderSessionIdRef.current || 'none'
-    });
-  }, []);
 
   const reportHostConnectionEvent = useCallback(
     (stage: string, detail: string, severity: 'INFO' | 'WARN' | 'ERROR' | 'FATAL' = 'INFO', pairCodeOverride?: string) => {
       const pairCode = pairCodeOverride ?? activePairCodeRef.current ?? cameraPairCode ?? 'pending';
-      const entry: PairDebugEntry = {
-        ts: new Date().toISOString(),
-        stage,
-        detail,
-        severity,
-        pairCode
-      };
       void createApplicationReport({
         occurred_at: new Date().toISOString(),
         source: 'web-host-connection',
@@ -293,10 +241,8 @@ export default function Tournament() {
         file_path: `host:${pairCode}`,
         upload_status: 'synced'
       });
-      setPairDebugEntries((current) => [...current.slice(-9), entry]);
-      syncPairDebugSnapshot();
     },
-    [cameraPairCode, syncPairDebugSnapshot]
+    [cameraPairCode]
   );
 
   const describeHostPeerState = useCallback((peer: RTCPeerConnection | null | undefined) => {
@@ -1487,9 +1433,6 @@ export default function Tournament() {
     pendingIncomingIceCandidatesRef.current = [];
     setCameraPairCode('');
     setCameraPairStatus('Not paired');
-    setSignalTransport(null);
-    setPairDebugEntries([]);
-    syncPairDebugSnapshot();
   };
 
   async function prepareHostPairingSession(nextPairCode: string, forceReset = false) {
@@ -1510,12 +1453,10 @@ export default function Tournament() {
     reportHostConnectionEvent('pair-code-generated', 'Host generated new pair code.', 'INFO', nextPairCode);
     const signalClient = await createPairSignalClient(nextPairCode, handleIncomingPairSignal);
     pairSignalClientRef.current = signalClient;
-    setSignalTransport(signalClient.transport);
     reportHostConnectionEvent('signal-client-ready', `Signal client ready using ${signalClient.transport}.`, 'INFO', nextPairCode);
 
     const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
     pairPeerRef.current = peer;
-    syncPairDebugSnapshot();
     peer.ontrack = (event) => {
       const incomingStream = event.streams?.[0] ?? new MediaStream();
       if (!event.streams?.[0] && event.track) {
@@ -1584,7 +1525,6 @@ export default function Tournament() {
       }
     };
     peer.onconnectionstatechange = () => {
-      syncPairDebugSnapshot();
       reportHostConnectionEvent(
         'host-connection-state',
         `Host peer connection state=${peer.connectionState}; ${describeHostPeerState(peer)}`,
@@ -1611,7 +1551,6 @@ export default function Tournament() {
       }
     };
     peer.oniceconnectionstatechange = () => {
-      syncPairDebugSnapshot();
       reportHostConnectionEvent(
         'host-ice-state',
         `Host ICE state is ${peer.iceConnectionState}; ${describeHostPeerState(peer)}`,
@@ -1620,7 +1559,6 @@ export default function Tournament() {
       );
     };
     peer.onicegatheringstatechange = () => {
-      syncPairDebugSnapshot();
       reportHostConnectionEvent(
         'host-ice-gathering-state',
         `Host ICE gathering state is ${peer.iceGatheringState}; ${describeHostPeerState(peer)}`,
@@ -3148,147 +3086,12 @@ export default function Tournament() {
                                 <div className="camera-pairing-code">
                                   <strong>{cameraPairCode}</strong>
                                   <small>Scan the QR code on the phone, allow camera access, and the rear camera will join this broadcast.</small>
-                                  {signalTransport ? (
-                                    <small>
-                                      Signaling: {signalTransport === 'supabase' ? 'Supabase realtime' : 'Local browser channel'}
-                                    </small>
-                                  ) : null}
-                                </div>
-                                <div className="camera-pairing-debug">
-                                  <strong>Remote pairing diagnostics</strong>
-                                  <div className="camera-pairing-debug-grid">
-                                    <div>
-                                      <span>Transport</span>
-                                      <strong>{signalTransport ?? 'Waiting'}</strong>
-                                    </div>
-                                    <div>
-                                      <span>Supabase</span>
-                                      <strong>{pairDiagnostics.supabaseConfigured ? 'Configured' : 'Missing'}</strong>
-                                    </div>
-                                    <div>
-                                      <span>BroadcastChannel</span>
-                                      <strong>{pairDiagnostics.hasBroadcastChannel ? 'Supported' : 'Unavailable'}</strong>
-                                    </div>
-                                    <div>
-                                      <span>Signal key</span>
-                                      <strong>{pairDiagnostics.signalSessionKey}</strong>
-                                    </div>
-                                  </div>
-                                  {!pairDiagnostics.signalReady ? (
-                                    <small className="camera-status-note">
-                                      Pairing cannot complete without Supabase signaling or a supported browser BroadcastChannel.
-                                    </small>
-                                  ) : null}
-                                  <div className="camera-pairing-debug camera-pairing-debug--live">
-                                    <strong>Live connection trace</strong>
-                                    <div className="camera-pairing-debug-grid">
-                                      <div>
-                                        <span>Peer state</span>
-                                        <strong>{pairDebugSnapshot.peerConnectionState}</strong>
-                                      </div>
-                                      <div>
-                                        <span>Signaling</span>
-                                        <strong>{pairDebugSnapshot.signalingState}</strong>
-                                      </div>
-                                      <div>
-                                        <span>ICE state</span>
-                                        <strong>{pairDebugSnapshot.iceConnectionState}</strong>
-                                      </div>
-                                      <div>
-                                        <span>Gathering</span>
-                                        <strong>{pairDebugSnapshot.iceGatheringState}</strong>
-                                      </div>
-                                      <div>
-                                        <span>Host session</span>
-                                        <strong>{pairDebugSnapshot.hostSessionId}</strong>
-                                      </div>
-                                      <div>
-                                        <span>Sender session</span>
-                                        <strong>{pairDebugSnapshot.senderSessionId}</strong>
-                                      </div>
-                                    </div>
-                                    <ul className="camera-pairing-debug-trace">
-                                      {pairDebugEntries.length === 0 ? (
-                                        <li>No live events yet.</li>
-                                      ) : (
-                                        pairDebugEntries.slice().reverse().map((entry) => (
-                                          <li key={`${entry.ts}-${entry.stage}`}>
-                                            <strong>[{entry.severity}] {entry.stage}</strong>
-                                            <span>{entry.detail}</span>
-                                          </li>
-                                        ))
-                                      )}
-                                    </ul>
-                                  </div>
                                 </div>
                               </div>
                             ) : (
-                              <div className="camera-pairing-debug">
-                                <strong>Remote pairing diagnostics</strong>
-                                <div className="camera-pairing-debug-grid">
-                                  <div>
-                                    <span>Transport</span>
-                                    <strong>{signalTransport ?? 'Waiting'}</strong>
-                                  </div>
-                                  <div>
-                                    <span>Supabase</span>
-                                    <strong>{pairDiagnostics.supabaseConfigured ? 'Configured' : 'Missing'}</strong>
-                                  </div>
-                                  <div>
-                                    <span>BroadcastChannel</span>
-                                    <strong>{pairDiagnostics.hasBroadcastChannel ? 'Supported' : 'Unavailable'}</strong>
-                                  </div>
-                                  <div>
-                                    <span>Signal key</span>
-                                    <strong>{pairDiagnostics.signalSessionKey}</strong>
-                                  </div>
-                                </div>
-                                {!pairDiagnostics.signalReady ? (
-                                  <small className="camera-status-note">
-                                    Pairing cannot complete without Supabase signaling or a supported browser BroadcastChannel.
-                                  </small>
-                                ) : null}
-                                <div className="camera-pairing-debug camera-pairing-debug--live">
-                                  <strong>Live connection trace</strong>
-                                  <div className="camera-pairing-debug-grid">
-                                    <div>
-                                      <span>Peer state</span>
-                                      <strong>{pairDebugSnapshot.peerConnectionState}</strong>
-                                    </div>
-                                    <div>
-                                      <span>Signaling</span>
-                                      <strong>{pairDebugSnapshot.signalingState}</strong>
-                                    </div>
-                                    <div>
-                                      <span>ICE state</span>
-                                      <strong>{pairDebugSnapshot.iceConnectionState}</strong>
-                                    </div>
-                                    <div>
-                                      <span>Gathering</span>
-                                      <strong>{pairDebugSnapshot.iceGatheringState}</strong>
-                                    </div>
-                                    <div>
-                                      <span>Host session</span>
-                                      <strong>{pairDebugSnapshot.hostSessionId}</strong>
-                                    </div>
-                                    <div>
-                                      <span>Sender session</span>
-                                      <strong>{pairDebugSnapshot.senderSessionId}</strong>
-                                    </div>
-                                  </div>
-                                  <ul className="camera-pairing-debug-trace">
-                                    {pairDebugEntries.length === 0 ? (
-                                      <li>No live events yet.</li>
-                                    ) : (
-                                      pairDebugEntries.slice().reverse().map((entry) => (
-                                        <li key={`${entry.ts}-${entry.stage}`}>
-                                          <strong>[{entry.severity}] {entry.stage}</strong>
-                                          <span>{entry.detail}</span>
-                                        </li>
-                                      ))
-                                    )}
-                                  </ul>
-                                </div>
+                              <div className="camera-pairing-code">
+                                <strong>{cameraPairCode || 'Pending'}</strong>
+                                <small>Generate a new QR code to start the remote camera pairing flow.</small>
                               </div>
                             )}
                           </div>

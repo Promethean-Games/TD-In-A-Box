@@ -225,6 +225,22 @@ class CameraSenderService : Service() {
 
     private suspend fun connect(pairCode: String, source: String) {
         val currentState = _uiState.value.connectionState
+        val hasActiveSessionForPair = activePairCode == pairCode &&
+            activeSessionId != null &&
+            !manualDisconnect &&
+            (currentState == SenderConnectionState.CONNECTING ||
+                currentState == SenderConnectionState.CONNECTED ||
+                peerConnection != null ||
+                hasReceivedHostOffer)
+        if (hasActiveSessionForPair) {
+            logConnectionReport(
+                stage = "connect-ignored-active-session",
+                detail = "Ignored connect request from $source because this pair code already has an active sender session in progress.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+            return
+        }
         val hasLinkedSessionForPair = activePairCode == pairCode &&
             signalClient != null &&
             (peerConnection?.remoteDescription != null || hasReceivedHostOffer)
