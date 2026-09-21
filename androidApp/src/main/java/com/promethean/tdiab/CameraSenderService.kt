@@ -55,7 +55,6 @@ import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.util.concurrent.CopyOnWriteArraySet
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -954,95 +953,34 @@ class CameraSenderService : Service() {
         pairCode: String
     ) {
         serviceScope.launch(Dispatchers.IO) {
-            val callbackHandled = AtomicBoolean(false)
             try {
                 logConnectionReport(
                     stage = "local-description-native-call-start",
                     detail = "Calling PeerConnection.setLocalDescription with the created local answer.",
                     pairCode = pairCode
                 )
-                rtcPeer.setLocalDescription(
-                    object : SdpObserver {
-                        override fun onCreateSuccess(sessionDescription: SessionDescription?) = Unit
-
-                        override fun onSetSuccess() {
-                            logConnectionReport(
-                                stage = "local-description-callback-success",
-                                detail = "PeerConnection.setLocalDescription reported success.",
-                                pairCode = pairCode
-                            )
-                            if (callbackHandled.compareAndSet(false, true)) {
-                                serviceScope.launch(Dispatchers.IO) {
-                                    runCatching { drainPendingIce(rtcPeer) }
-                                    logConnectionReport(
-                                        stage = "local-description-set",
-                                        detail = "Local answer applied successfully.",
-                                        pairCode = pairCode
-                                    )
-                                    runCatching {
-                                        sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
-                                    }.onFailure { error ->
-                                        logConnectionReport(
-                                            stage = "answer-dispatch-failed",
-                                            detail = error.message ?: "Answer dispatch coroutine failed after local description success.",
-                                            severity = "ERROR",
-                                            pairCode = pairCode
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        override fun onSetFailure(error: String?) {
-                            val detail = error ?: "PeerConnection.setLocalDescription reported failure."
-                            logConnectionReport(
-                                stage = "local-description-callback-failed",
-                                detail = detail,
-                                severity = "ERROR",
-                                pairCode = pairCode
-                            )
-                            if (callbackHandled.compareAndSet(false, true)) {
-                                serviceScope.launch(Dispatchers.IO) {
-                                    logConnectionReport(
-                                        stage = "local-description-failed",
-                                        detail = detail,
-                                        severity = "WARN",
-                                        pairCode = pairCode
-                                    )
-                                    runCatching {
-                                        sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
-                                    }.onFailure { error ->
-                                        logConnectionReport(
-                                            stage = "answer-dispatch-failed",
-                                            detail = error.message ?: "Answer dispatch coroutine failed after local description failure.",
-                                            severity = "ERROR",
-                                            pairCode = pairCode
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        override fun onCreateFailure(error: String?) = Unit
-                    },
-                    answer
-                )
+                rtcPeer.setLocalDescriptionAwait(answer)
                 logConnectionReport(
-                    stage = "local-description-native-call-returned",
-                    detail = "PeerConnection.setLocalDescription returned control to the coroutine.",
+                    stage = "local-description-callback-success",
+                    detail = "PeerConnection.setLocalDescription reported success.",
                     pairCode = pairCode
                 )
+                runCatching { drainPendingIce(rtcPeer) }
+                logConnectionReport(
+                    stage = "local-description-set",
+                    detail = "Local answer applied successfully.",
+                    pairCode = pairCode
+                )
+                sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
             } catch (error: Throwable) {
                 logConnectionReport(
-                    stage = "local-description-native-call-threw",
-                    detail = error.message ?: "PeerConnection.setLocalDescription threw unexpectedly.",
+                    stage = "local-description-failed",
+                    detail = error.message ?: "PeerConnection.setLocalDescription reported failure.",
                     severity = "ERROR",
                     pairCode = pairCode
                 )
-                if (callbackHandled.compareAndSet(false, true) && !manualDisconnect) {
-                    serviceScope.launch {
-                        scheduleReconnect("Local answer application failed.")
-                    }
+                if (!manualDisconnect) {
+                    scheduleReconnect("Local answer application failed.")
                 }
             }
         }
@@ -1617,6 +1555,22 @@ private suspend fun PeerConnection.setRemoteDescriptionAwait(description: Sessio
             override fun onCreateFailure(error: String?) = Unit
             override fun onSetFailure(error: String?) {
                 continuation.resumeWithException(IllegalStateException(error ?: "Remote description failed."))
+            }
+        }, description)
+    }
+}
+
+private suspend fun PeerConnection.setLocalDescriptionAwait(description: SessionDescription) {
+    suspendCancellableCoroutine { continuation ->
+        setLocalDescription(object : SdpObserver {
+            override fun onCreateSuccess(sessionDescription: SessionDescription?) = Unit
+            override fun onSetSuccess() {
+                continuation.resume(Unit)
+            }
+
+            override fun onCreateFailure(error: String?) = Unit
+            override fun onSetFailure(error: String?) {
+                continuation.resumeWithException(IllegalStateException(error ?: "Local description failed."))
             }
         }, description)
     }
