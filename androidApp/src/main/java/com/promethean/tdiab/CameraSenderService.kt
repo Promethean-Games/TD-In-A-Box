@@ -704,13 +704,24 @@ class CameraSenderService : Service() {
             pairCode = pairCode
         )
         if (message.sessionId != null && activeHostSessionId != null && message.sessionId != activeHostSessionId) {
+            if (currentPeer?.remoteDescription != null ||
+                hasReceivedHostOffer ||
+                _uiState.value.connectionState == SenderConnectionState.CONNECTED
+            ) {
+                logConnectionReport(
+                    stage = "host-session-stale",
+                    detail = "Ignoring stale host signal session ${message.sessionId}; active session is ${activeHostSessionId}.",
+                    severity = "WARN",
+                    pairCode = pairCode
+                )
+                return
+            }
             logConnectionReport(
-                stage = "host-session-stale",
-                detail = "Ignoring stale host signal session ${message.sessionId}; active session is ${activeHostSessionId}.",
-                severity = "WARN",
+                stage = "host-session-adopted",
+                detail = "Adopting refreshed host session ${message.sessionId}; previous session was ${activeHostSessionId}.",
+                severity = "INFO",
                 pairCode = pairCode
             )
-            return
         }
         if (message.sessionId != null) {
             activeHostSessionId = message.sessionId
