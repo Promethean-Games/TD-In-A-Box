@@ -230,7 +230,7 @@ class CameraSenderService : Service() {
         }
     }
 
-    private suspend fun connect(pairCode: String, source: String) {
+    private suspend fun connect(pairCode: String, source: String, preservedSessionId: String? = null) {
         if (BuildConfig.SUPABASE_URL.isBlank() || BuildConfig.SUPABASE_ANON_KEY.isBlank()) {
             logConnectionReport(
                 stage = "config-missing",
@@ -313,7 +313,7 @@ class CameraSenderService : Service() {
         reconnectJob?.cancel()
         logConnectionReport(
             stage = "connect-requested",
-            detail = "Connect requested from $source.",
+            detail = "Connect requested from $source; senderSession=${preservedSessionId ?: "new"}.",
             pairCode = pairCode
         )
         initializePeerFactory()
@@ -346,7 +346,7 @@ class CameraSenderService : Service() {
 
         try {
             shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
-            activeSessionId = java.util.UUID.randomUUID().toString()
+            activeSessionId = preservedSessionId ?: java.util.UUID.randomUUID().toString()
             val track = startLocalVideoCapture()
             val rtcPeer = createPeerConnection()
             peerConnection = rtcPeer
@@ -1045,7 +1045,7 @@ class CameraSenderService : Service() {
         val scheduledSessionId = activeSessionId
         logConnectionReport(
             stage = "reconnect-scheduled",
-            detail = reason,
+            detail = "$reason Preserving sender session ${scheduledSessionId ?: "none"}.",
             severity = "WARN",
             pairCode = pairCode
         )
@@ -1092,7 +1092,7 @@ class CameraSenderService : Service() {
             }
             shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
             if (!manualDisconnect && activePairCode == pairCode) {
-                connect(pairCode, source = "auto-reconnect")
+                connect(pairCode, source = "auto-reconnect", preservedSessionId = scheduledSessionId)
             }
         }
     }
