@@ -99,6 +99,7 @@ class CameraSenderService : Service() {
     private var localIceSequence = 0
     private var activePairCode: String? = null
     private var activeSessionId: String? = null
+    private var stickySessionId: String? = null
     private var activeHostSessionId: String? = null
     private val connectStartupLock = Any()
     private var startupPairCode: String? = null
@@ -311,9 +312,10 @@ class CameraSenderService : Service() {
         activePairCode = pairCode
         activeHostSessionId = null
         reconnectJob?.cancel()
+        val reusedSessionId = preservedSessionId ?: stickySessionId
         logConnectionReport(
             stage = "connect-requested",
-            detail = "Connect requested from $source; senderSession=${preservedSessionId ?: "new"}.",
+            detail = "Connect requested from $source; senderSession=${reusedSessionId ?: "new"}.",
             pairCode = pairCode
         )
         initializePeerFactory()
@@ -346,7 +348,8 @@ class CameraSenderService : Service() {
 
         try {
             shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
-            activeSessionId = preservedSessionId ?: java.util.UUID.randomUUID().toString()
+            activeSessionId = reusedSessionId ?: java.util.UUID.randomUUID().toString()
+            stickySessionId = activeSessionId
             val track = startLocalVideoCapture()
             val rtcPeer = createPeerConnection()
             peerConnection = rtcPeer
@@ -1043,9 +1046,10 @@ class CameraSenderService : Service() {
             return
         }
         val scheduledSessionId = activeSessionId
+        val stickyReconnectSessionId = stickySessionId
         logConnectionReport(
             stage = "reconnect-scheduled",
-            detail = "$reason Preserving sender session ${scheduledSessionId ?: "none"}.",
+            detail = "$reason Preserving sender session ${scheduledSessionId ?: stickyReconnectSessionId ?: "none"}.",
             severity = "WARN",
             pairCode = pairCode
         )
@@ -1092,7 +1096,11 @@ class CameraSenderService : Service() {
             }
             shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
             if (!manualDisconnect && activePairCode == pairCode) {
-                connect(pairCode, source = "auto-reconnect", preservedSessionId = scheduledSessionId)
+                connect(
+                    pairCode = pairCode,
+                    source = "auto-reconnect",
+                    preservedSessionId = scheduledSessionId ?: stickyReconnectSessionId
+                )
             }
         }
     }
@@ -1104,6 +1112,7 @@ class CameraSenderService : Service() {
         )
         manualDisconnect = true
         activePairCode = null
+        stickySessionId = null
         shutdownSession(notifyStop = true)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -1162,6 +1171,7 @@ class CameraSenderService : Service() {
 
             if (clearPairCode) {
                 activePairCode = null
+                stickySessionId = null
             }
 
             updateState(
