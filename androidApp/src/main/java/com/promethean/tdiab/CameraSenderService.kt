@@ -76,6 +76,7 @@ data class SenderUiState(
 )
 
 class CameraSenderService : Service() {
+    private val senderPrefs by lazy { getSharedPreferences(SENDER_PREFS_NAME, MODE_PRIVATE) }
     private val serviceExceptionHandler = CoroutineExceptionHandler { _, throwable ->
         runCatching {
             ApplicationReportHub.recordCrash("CameraSenderService", throwable)
@@ -121,6 +122,7 @@ class CameraSenderService : Service() {
         super.onCreate()
         notificationManager = getSystemService(NotificationManager::class.java)
         ensureNotificationChannel()
+        restoreStickySessionFromStorage()
     }
 
     override fun onBind(intent: Intent?): IBinder = localBinder
@@ -152,7 +154,7 @@ class CameraSenderService : Service() {
 
     override fun onDestroy() {
         runBlocking {
-            shutdownSession(notifyStop = false)
+            shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
         }
         peerConnectionFactory?.dispose()
         peerConnectionFactory = null
@@ -351,6 +353,7 @@ class CameraSenderService : Service() {
             shutdownSession(notifyStop = false, clearPairCode = false, stopForegroundSession = false)
             activeSessionId = reusedSessionId ?: java.util.UUID.randomUUID().toString()
             stickySessionId = activeSessionId
+            persistStickySession(pairCode, activeSessionId!!)
             val track = startLocalVideoCapture()
             val rtcPeer = createPeerConnection()
             peerConnection = rtcPeer
@@ -1194,6 +1197,7 @@ class CameraSenderService : Service() {
         manualDisconnect = true
         activePairCode = null
         stickySessionId = null
+        clearPersistedSession()
         shutdownSession(notifyStop = true)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -1255,6 +1259,7 @@ class CameraSenderService : Service() {
             if (clearPairCode) {
                 activePairCode = null
                 stickySessionId = null
+                clearPersistedSession()
             }
 
             updateState(
@@ -1518,9 +1523,35 @@ class CameraSenderService : Service() {
         )
     }
 
+    private fun restoreStickySessionFromStorage() {
+        val storedPairCode = senderPrefs.getString(KEY_PAIR_CODE, null)
+        val storedSessionId = senderPrefs.getString(KEY_SESSION_ID, null)
+        if (!storedPairCode.isNullOrBlank() && !storedSessionId.isNullOrBlank()) {
+            stickySessionId = storedSessionId
+            activePairCode = storedPairCode
+        }
+    }
+
+    private fun persistStickySession(pairCode: String, sessionId: String) {
+        senderPrefs.edit()
+            .putString(KEY_PAIR_CODE, pairCode)
+            .putString(KEY_SESSION_ID, sessionId)
+            .apply()
+    }
+
+    private fun clearPersistedSession() {
+        senderPrefs.edit()
+            .remove(KEY_PAIR_CODE)
+            .remove(KEY_SESSION_ID)
+            .apply()
+    }
+
     companion object {
         private const val NOTIFICATION_CHANNEL_ID = "tdiab-camera-sender"
         private const val NOTIFICATION_ID = 4307
+        private const val SENDER_PREFS_NAME = "tdiab_sender_service_prefs"
+        private const val KEY_PAIR_CODE = "sender_pair_code"
+        private const val KEY_SESSION_ID = "sender_session_id"
         const val ACTION_CONNECT = "com.promethean.tdiab.action.CONNECT_NATIVE_SENDER"
         const val ACTION_DISCONNECT = "com.promethean.tdiab.action.DISCONNECT_NATIVE_SENDER"
         const val EXTRA_PAIR_CODE = "pair_code"
