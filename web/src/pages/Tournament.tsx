@@ -941,7 +941,7 @@ export default function Tournament() {
       allowedBroadcastChannels.some((channel) => channel.id === selectedBroadcastChannel.id)
   );
   const hasConnectedCameraFeed =
-    cameraConnectionState === 'CONNECTED' &&
+    Boolean(activePreviewStream) &&
     Boolean(selectedCameraSource?.id) &&
     Boolean(selectedCameraSource?.id && (broadcastConfig.cameraTableMap?.[selectedCameraSource.id] ?? 0) > 0);
   const hasMappedCameraTable = Boolean(selectedCameraSource?.id && (broadcastConfig.cameraTableMap?.[selectedCameraSource.id] ?? 0) > 0);
@@ -2867,7 +2867,7 @@ export default function Tournament() {
                       </span>
                     </div>
                     <div className="broadcast-preview-stage">
-                      {cameraConnectionState === 'CONNECTED' ? (
+                      {activePreviewStream ? (
                         <video ref={previewVideoRef} autoPlay muted playsInline />
                       ) : (
                         <div className="broadcast-preview-empty">
