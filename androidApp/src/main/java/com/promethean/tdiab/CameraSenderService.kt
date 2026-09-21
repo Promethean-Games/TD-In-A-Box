@@ -100,6 +100,8 @@ class CameraSenderService : Service() {
     private var activePairCode: String? = null
     private var activeSessionId: String? = null
     private var activeHostSessionId: String? = null
+    private val connectStartupLock = Any()
+    private var startupPairCode: String? = null
 
     private var powerWakeLock: PowerManager.WakeLock? = null
     private var peerConnectionFactory: PeerConnectionFactory? = null
@@ -122,9 +124,14 @@ class CameraSenderService : Service() {
     override fun onBind(intent: Intent?): IBinder = localBinder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action ?: "none"
+        val nextPairCode = intent?.getStringExtra(EXTRA_PAIR_CODE)?.trim()?.uppercase().orEmpty()
+        logConnectionReport(
+            stage = "service-start-command",
+            detail = "onStartCommand action=$action; startId=$startId; flags=$flags; pairCode=${nextPairCode.ifBlank { "none" }}; activePairCode=${activePairCode ?: "none"}; activeSession=${activeSessionId ?: "none"}; startupPairCode=${startupPairCode ?: "none"}; state=${_uiState.value.connectionState.name.lowercase()}."
+        )
         when (intent?.action) {
             ACTION_CONNECT -> {
-                val nextPairCode = intent.getStringExtra(EXTRA_PAIR_CODE)?.trim()?.uppercase().orEmpty()
                 if (nextPairCode.isNotBlank()) {
                     serviceScope.launch {
                         connect(nextPairCode, source = "service-intent")
@@ -224,47 +231,6 @@ class CameraSenderService : Service() {
     }
 
     private suspend fun connect(pairCode: String, source: String) {
-        val currentState = _uiState.value.connectionState
-        val hasActiveSessionForPair = activePairCode == pairCode &&
-            activeSessionId != null &&
-            !manualDisconnect &&
-            (currentState == SenderConnectionState.CONNECTING ||
-                currentState == SenderConnectionState.CONNECTED ||
-                peerConnection != null ||
-                hasReceivedHostOffer)
-        if (hasActiveSessionForPair) {
-            logConnectionReport(
-                stage = "connect-ignored-active-session",
-                detail = "Ignored connect request from $source because this pair code already has an active sender session in progress.",
-                severity = "WARN",
-                pairCode = pairCode
-            )
-            return
-        }
-        val hasLinkedSessionForPair = activePairCode == pairCode &&
-            signalClient != null &&
-            (peerConnection?.remoteDescription != null || hasReceivedHostOffer)
-        if (hasLinkedSessionForPair) {
-            logConnectionReport(
-                stage = "connect-ignored-linked-session",
-                detail = "Ignored connect request from $source because this pair code already has an active linked sender session.",
-                severity = "WARN",
-                pairCode = pairCode
-            )
-            return
-        }
-        if (activePairCode == pairCode &&
-            signalClient != null &&
-            (currentState == SenderConnectionState.CONNECTING || currentState == SenderConnectionState.CONNECTED)
-        ) {
-            logConnectionReport(
-                stage = "connect-ignored-duplicate",
-                detail = "Ignored duplicate connect request from $source while sender was already active for this pair code.",
-                severity = "WARN",
-                pairCode = pairCode
-            )
-            return
-        }
         if (BuildConfig.SUPABASE_URL.isBlank() || BuildConfig.SUPABASE_ANON_KEY.isBlank()) {
             logConnectionReport(
                 stage = "config-missing",
@@ -278,6 +244,60 @@ class CameraSenderService : Service() {
                 connectionState = SenderConnectionState.DISCONNECTED,
                 isStreaming = false,
                 errorText = "Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY for the Android build."
+            )
+            return
+        }
+        val claimedStartup = claimConnectStartup(pairCode)
+        if (!claimedStartup) {
+            logConnectionReport(
+                stage = "connect-ignored-startup-in-progress",
+                detail = "Ignored connect request from $source because sender startup is already in progress for this pair code.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+            return
+        }
+        val currentState = _uiState.value.connectionState
+        val hasActiveSessionForPair = activePairCode == pairCode &&
+            activeSessionId != null &&
+            !manualDisconnect &&
+            (currentState == SenderConnectionState.CONNECTING ||
+                currentState == SenderConnectionState.CONNECTED ||
+                peerConnection != null ||
+                hasReceivedHostOffer)
+        if (hasActiveSessionForPair) {
+            releaseConnectStartup(pairCode)
+            logConnectionReport(
+                stage = "connect-ignored-active-session",
+                detail = "Ignored connect request from $source because this pair code already has an active sender session in progress.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+            return
+        }
+        val hasLinkedSessionForPair = activePairCode == pairCode &&
+            signalClient != null &&
+            (peerConnection?.remoteDescription != null || hasReceivedHostOffer)
+        if (hasLinkedSessionForPair) {
+            releaseConnectStartup(pairCode)
+            logConnectionReport(
+                stage = "connect-ignored-linked-session",
+                detail = "Ignored connect request from $source because this pair code already has an active linked sender session.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+            return
+        }
+        if (activePairCode == pairCode &&
+            signalClient != null &&
+            (currentState == SenderConnectionState.CONNECTING || currentState == SenderConnectionState.CONNECTED)
+        ) {
+            releaseConnectStartup(pairCode)
+            logConnectionReport(
+                stage = "connect-ignored-duplicate",
+                detail = "Ignored duplicate connect request from $source while sender was already active for this pair code.",
+                severity = "WARN",
+                pairCode = pairCode
             )
             return
         }
@@ -298,6 +318,7 @@ class CameraSenderService : Service() {
         )
         initializePeerFactory()
         if (peerConnectionFactory == null || eglBase == null) {
+            releaseConnectStartup(pairCode)
             logConnectionReport(
                 stage = "webrtc-init-failed",
                 detail = "WebRTC initialization did not complete.",
@@ -385,7 +406,9 @@ class CameraSenderService : Service() {
             )
             startReadyAnnouncements(nextSignalClient, pairCode)
             startOfferTimeoutMonitor(pairCode)
+            releaseConnectStartup(pairCode)
         } catch (error: Throwable) {
+            releaseConnectStartup(pairCode)
             logConnectionReport(
                 stage = "connect-failed",
                 detail = error.message ?: "Unknown startup failure.",
@@ -1366,6 +1389,24 @@ class CameraSenderService : Service() {
                     severity = "WARN",
                     pairCode = pairCode
                 )
+            }
+        }
+    }
+
+    private fun claimConnectStartup(pairCode: String): Boolean {
+        synchronized(connectStartupLock) {
+            if (startupPairCode == pairCode) {
+                return false
+            }
+            startupPairCode = pairCode
+            return true
+        }
+    }
+
+    private fun releaseConnectStartup(pairCode: String) {
+        synchronized(connectStartupLock) {
+            if (startupPairCode == pairCode) {
+                startupPairCode = null
             }
         }
     }
