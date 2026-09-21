@@ -852,14 +852,23 @@ class CameraSenderService : Service() {
                                 pairCode = pairCode
                             )
                             if (callbackHandled.compareAndSet(false, true)) {
-                                serviceScope.launch {
+                                serviceScope.launch(Dispatchers.IO) {
                                     runCatching { drainPendingIce(rtcPeer) }
                                     logConnectionReport(
                                         stage = "local-description-set",
                                         detail = "Local answer applied successfully.",
                                         pairCode = pairCode
                                     )
-                                    sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
+                                    runCatching {
+                                        sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
+                                    }.onFailure { error ->
+                                        logConnectionReport(
+                                            stage = "answer-dispatch-failed",
+                                            detail = error.message ?: "Answer dispatch coroutine failed after local description success.",
+                                            severity = "ERROR",
+                                            pairCode = pairCode
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -873,14 +882,23 @@ class CameraSenderService : Service() {
                                 pairCode = pairCode
                             )
                             if (callbackHandled.compareAndSet(false, true)) {
-                                serviceScope.launch {
+                                serviceScope.launch(Dispatchers.IO) {
                                     logConnectionReport(
                                         stage = "local-description-failed",
                                         detail = detail,
                                         severity = "WARN",
                                         pairCode = pairCode
                                     )
-                                    sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
+                                    runCatching {
+                                        sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
+                                    }.onFailure { error ->
+                                        logConnectionReport(
+                                            stage = "answer-dispatch-failed",
+                                            detail = error.message ?: "Answer dispatch coroutine failed after local description failure.",
+                                            severity = "ERROR",
+                                            pairCode = pairCode
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -926,36 +944,54 @@ class CameraSenderService : Service() {
             return
         }
 
-        updateState(
-            pairCode = pairCode,
-            statusText = "Sending answer to host…",
-            connectionState = SenderConnectionState.CONNECTING,
-            isStreaming = true,
-            errorText = null
-        )
         logConnectionReport(
             stage = "answer-send-start",
             detail = "Local answer prepared; sending payload to host; ${describePeerState(rtcPeer)}.",
             pairCode = pairCode
         )
+        runCatching {
+            updateState(
+                pairCode = pairCode,
+                statusText = "Sending answer to host…",
+                connectionState = SenderConnectionState.CONNECTING,
+                isStreaming = true,
+                errorText = null
+            )
+        }.onFailure { error ->
+            logConnectionReport(
+                stage = "answer-send-status-update-failed",
+                detail = error.message ?: "Failed to update sender status before answer publish.",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+        }
         startPostOfferConnectionTimeout(pairCode)
 
         try {
             withTimeout(6_000) {
                 signalClient.send(answerMessage)
             }
-            updateState(
-                pairCode = pairCode,
-                statusText = "Answer sent. Finishing secure connection…",
-                connectionState = SenderConnectionState.CONNECTING,
-                isStreaming = true,
-                errorText = null
-            )
             logConnectionReport(
                 stage = "answer-sent",
                 detail = "Local answer sent to host; waiting for ICE/connection completion; ${describePeerState(rtcPeer)}.",
                 pairCode = pairCode
             )
+            runCatching {
+                updateState(
+                    pairCode = pairCode,
+                    statusText = "Answer sent. Finishing secure connection…",
+                    connectionState = SenderConnectionState.CONNECTING,
+                    isStreaming = true,
+                    errorText = null
+                )
+            }.onFailure { error ->
+                logConnectionReport(
+                    stage = "answer-send-status-update-failed",
+                    detail = error.message ?: "Failed to update sender status after answer publish.",
+                    severity = "WARN",
+                    pairCode = pairCode
+                )
+            }
         } catch (error: Throwable) {
             logConnectionReport(
                 stage = "answer-send-failed",
