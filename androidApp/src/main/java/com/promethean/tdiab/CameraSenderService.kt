@@ -496,7 +496,16 @@ class CameraSenderService : Service() {
                 pairCode = pairCode
             )
             if (!manualDisconnect) {
-                scheduleReconnect("Failed to restart signaling transport.")
+                signalTransportRestartJob = serviceScope.launch(Dispatchers.IO) {
+                    delay(2_000)
+                    if (!manualDisconnect && activePairCode == pairCode && signalClient === replacementClient) {
+                        try {
+                            restartSignalTransport("Retrying signaling transport restart.")
+                        } finally {
+                            signalTransportRestartJob = null
+                        }
+                    }
+                }
             }
         }
     }
