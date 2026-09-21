@@ -105,7 +105,7 @@ export async function createPairSignalClient(
 
   if (isSupabaseConfigured && supabase) {
     const channel = supabase.channel(signalSessionKey, {
-      config: { broadcast: { self: true } }
+      config: { broadcast: { self: true, ack: true } }
     });
 
     channel.on('broadcast', { event: 'signal' }, ({ payload }) => {
@@ -139,7 +139,7 @@ export async function createPairSignalClient(
       return {
         transport: 'supabase',
         send: async (message) => {
-          await channel.send({
+          const result = await channel.send({
             type: 'broadcast',
             event: 'signal',
             payload: {
@@ -149,6 +149,9 @@ export async function createPairSignalClient(
               message
             }
           });
+          if (result !== 'ok') {
+            throw new Error(`Supabase signaling send failed: ${typeof result === 'string' ? result : 'unknown result'}.`);
+          }
         },
         close: () => {
           void channel.unsubscribe();
