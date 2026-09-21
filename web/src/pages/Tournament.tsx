@@ -1787,7 +1787,10 @@ export default function Tournament() {
         'WARN',
         activePairCode
       );
-      await prepareHostPairingSession(activePairCode, true);
+      activeSenderSessionIdRef.current = message.sessionId;
+      if (!hostAlreadyLinked) {
+        await publishHostOffer(activePairCodeRef.current || cameraPairCode || 'pending', 'resend');
+      }
       return;
     }
     if (message.sessionId && activeSenderSessionIdRef.current && message.sessionId !== activeSenderSessionIdRef.current) {
