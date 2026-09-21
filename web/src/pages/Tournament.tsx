@@ -230,6 +230,9 @@ export default function Tournament() {
   const activePairCodeRef = useRef<string>('');
   const activeHostSessionIdRef = useRef<string>('');
   const activeSenderSessionIdRef = useRef<string>('');
+  const hostSignalSequenceRef = useRef(0);
+  const hostIceSequenceRef = useRef(0);
+  const hostPreviewAttachSequenceRef = useRef(0);
   const offerInFlightRef = useRef(false);
   const offerTimeoutRef = useRef<number | null>(null);
   const offerResendLoopRef = useRef<number | null>(null);
@@ -295,6 +298,11 @@ export default function Tournament() {
     },
     [cameraPairCode, syncPairDebugSnapshot]
   );
+
+  const describeHostPeerState = useCallback((peer: RTCPeerConnection | null | undefined) => {
+    if (!peer) return 'peer=none';
+    return `peerState=${peer.connectionState}; iceState=${peer.iceConnectionState}; signalingState=${peer.signalingState}; gatheringState=${peer.iceGatheringState}`;
+  }, []);
 
   const handleSelectCameraInputMode = (nextMode: CameraInputMode) => {
     setCameraInputMode(nextMode);
@@ -632,8 +640,30 @@ export default function Tournament() {
     if (cameraConnectionState === 'CONNECTED' && activePreviewStream) {
       if (video.srcObject !== activePreviewStream) {
         video.srcObject = activePreviewStream;
+        hostPreviewAttachSequenceRef.current += 1;
+        reportHostConnectionEvent(
+          'host-preview-attached',
+          `Attached broadcast preview stream #${hostPreviewAttachSequenceRef.current}; tracks=${activePreviewStream.getTracks().length}; ${describeHostPeerState(pairPeerRef.current)}`,
+          'INFO'
+        );
       }
-      void video.play().catch(() => undefined);
+      void video.play()
+        .then(() => {
+          reportHostConnectionEvent(
+            'host-preview-played',
+            `Broadcast preview playback started; readyState=${video.readyState}; muted=${video.muted}; playsInline=${video.playsInline}; ${describeHostPeerState(pairPeerRef.current)}`,
+            'INFO'
+          );
+        })
+        .catch((error) => {
+          reportHostConnectionEvent(
+            'host-preview-play-failed',
+            error instanceof Error
+              ? `Broadcast preview playback failed: ${error.message}; ${describeHostPeerState(pairPeerRef.current)}`
+              : `Broadcast preview playback failed; ${describeHostPeerState(pairPeerRef.current)}`,
+            'WARN'
+          );
+        });
       return;
     }
     video.srcObject = null;
@@ -1441,6 +1471,9 @@ export default function Tournament() {
     activeHostSessionIdRef.current = '';
     activeSenderSessionIdRef.current = '';
     activePairCodeRef.current = '';
+    hostSignalSequenceRef.current = 0;
+    hostIceSequenceRef.current = 0;
+    hostPreviewAttachSequenceRef.current = 0;
     offerInFlightRef.current = false;
     hostIceSentLoggedRef.current = false;
     senderIceReceivedLoggedRef.current = false;
@@ -1469,6 +1502,9 @@ export default function Tournament() {
     activePairCodeRef.current = nextPairCode;
     activeHostSessionIdRef.current = generatePairSessionId();
     activeSenderSessionIdRef.current = '';
+    hostSignalSequenceRef.current = 0;
+    hostIceSequenceRef.current = 0;
+    hostPreviewAttachSequenceRef.current = 0;
     hostIceSentLoggedRef.current = false;
     senderIceReceivedLoggedRef.current = false;
     reportHostConnectionEvent('pair-code-generated', 'Host generated new pair code.', 'INFO', nextPairCode);
@@ -1503,10 +1539,31 @@ export default function Tournament() {
         setCameraConnectionState('DISCONNECTED');
         setCameraStatusNote('Remote track received; waiting for stable ICE connection before marking camera online.');
       }
-      reportHostConnectionEvent('host-ontrack', 'Host received remote media track and activated preview.', 'INFO', nextPairCode);
+      reportHostConnectionEvent(
+        'host-ontrack',
+        `Host received remote media track and activated preview; tracks=${incomingStream.getTracks().length}; streams=${event.streams?.length ?? 0}; ${describeHostPeerState(peer)}`,
+        'INFO',
+        nextPairCode
+      );
     };
     peer.onicecandidate = (event) => {
-      if (!event.candidate || !pairSignalClientRef.current) return;
+      if (!event.candidate) {
+        reportHostConnectionEvent(
+          'host-ice-gathering-complete',
+          `Host ICE gathering completed; ${describeHostPeerState(peer)}`,
+          'INFO',
+          nextPairCode
+        );
+        return;
+      }
+      hostIceSequenceRef.current += 1;
+      reportHostConnectionEvent(
+        'host-ice-generated',
+        `Generated host ICE candidate #${hostIceSequenceRef.current}; mid=${event.candidate.sdpMid ?? 'none'}; index=${event.candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+        'INFO',
+        nextPairCode
+      );
+      if (!pairSignalClientRef.current) return;
       void pairSignalClientRef.current.send({
         type: 'ice',
         from: 'host',
@@ -1517,10 +1574,23 @@ export default function Tournament() {
       if (!hostIceSentLoggedRef.current) {
         hostIceSentLoggedRef.current = true;
         reportHostConnectionEvent('host-ice-sent', 'Host sent ICE candidate(s) to sender.', 'INFO', nextPairCode);
+      } else {
+        reportHostConnectionEvent(
+          'host-ice-dispatched',
+          `Dispatched host ICE candidate #${hostIceSequenceRef.current}; session=${activeHostSessionIdRef.current}; ${describeHostPeerState(peer)}`,
+          'INFO',
+          nextPairCode
+        );
       }
     };
     peer.onconnectionstatechange = () => {
       syncPairDebugSnapshot();
+      reportHostConnectionEvent(
+        'host-connection-state',
+        `Host peer connection state=${peer.connectionState}; ${describeHostPeerState(peer)}`,
+        peer.connectionState === 'failed' ? 'WARN' : 'INFO',
+        nextPairCode
+      );
       if (peer.connectionState === 'connected') {
         setCameraPairStatus('Paired and streaming.');
         setCameraConnectionState('CONNECTED');
@@ -1544,13 +1614,19 @@ export default function Tournament() {
       syncPairDebugSnapshot();
       reportHostConnectionEvent(
         'host-ice-state',
-        `Host ICE state is ${peer.iceConnectionState}.`,
+        `Host ICE state is ${peer.iceConnectionState}; ${describeHostPeerState(peer)}`,
         peer.iceConnectionState === 'failed' ? 'WARN' : 'INFO',
         nextPairCode
       );
     };
     peer.onicegatheringstatechange = () => {
       syncPairDebugSnapshot();
+      reportHostConnectionEvent(
+        'host-ice-gathering-state',
+        `Host ICE gathering state is ${peer.iceGatheringState}; ${describeHostPeerState(peer)}`,
+        'INFO',
+        nextPairCode
+      );
     };
 
     setCameraPairCode(nextPairCode);
@@ -1624,9 +1700,20 @@ export default function Tournament() {
           offerToReceiveVideo: true
         });
         await peer.setLocalDescription(offer);
-        reportHostConnectionEvent('offer-local-description-set', 'Host local offer description set.');
+        reportHostConnectionEvent(
+          'offer-local-description-set',
+          `Host local offer description set; ${describeHostPeerState(peer)}`,
+          'INFO',
+          pairCode
+        );
       }
 
+      reportHostConnectionEvent(
+        reason === 'initial' ? 'offer-send-start' : 'offer-resend-start',
+        `Publishing ${reason} offer; hasRemoteDescription=${Boolean(peer.remoteDescription)}; ${describeHostPeerState(peer)}`,
+        'INFO',
+        pairCode
+      );
       await signalClient.send({
         type: 'offer',
         from: 'host',
@@ -1677,9 +1764,16 @@ export default function Tournament() {
     if (message.from !== 'sender') return;
     const activePairCode = activePairCodeRef.current || cameraPairCode || 'pending';
     const currentPeer = pairPeerRef.current;
+    const signalSequence = (hostSignalSequenceRef.current += 1);
     const hostAlreadyLinked = Boolean(
       currentPeer &&
       (currentPeer.connectionState === 'connected' || currentPeer.remoteDescription)
+    );
+    reportHostConnectionEvent(
+      'sender-signal-received',
+      `Inbound sender signal #${signalSequence}: type=${message.type}; session=${message.sessionId ?? 'none'}; activeHostSession=${activeHostSessionIdRef.current || 'none'}; activeSenderSession=${activeSenderSessionIdRef.current || 'none'}; ${describeHostPeerState(currentPeer)}`,
+      'INFO',
+      activePairCode
     );
     if (
       message.type === 'ready' &&
@@ -1738,7 +1832,7 @@ export default function Tournament() {
         if (peer.connectionState === 'connected' || peer.remoteDescription) {
           reportHostConnectionEvent(
             'sender-ready-ignored-linked',
-            'Sender ready received but host is already linked to this session. Continuing active connection.',
+            `Sender ready received but host is already linked to this session. Continuing active connection; ${describeHostPeerState(peer)}`,
             'INFO',
             activePairCode
           );
@@ -1747,7 +1841,12 @@ export default function Tournament() {
         if (message.sessionId) {
           activeSenderSessionIdRef.current = message.sessionId;
         }
-        reportHostConnectionEvent('sender-ready-received', 'Sender ready signal received by host.');
+        reportHostConnectionEvent(
+          'sender-ready-received',
+          `Sender ready signal received by host; session=${message.sessionId ?? 'none'}; ${describeHostPeerState(peer)}`,
+          'INFO',
+          activePairCode
+        );
         setCameraPairStatus('Phone ready. Building secure connection...');
         await publishHostOffer(activePairCodeRef.current || cameraPairCode || 'pending', 'resend');
         return;
@@ -1762,7 +1861,12 @@ export default function Tournament() {
           );
           return;
         }
-        reportHostConnectionEvent('answer-received', 'Host received answer from sender.');
+        reportHostConnectionEvent(
+          'answer-received',
+          `Host received answer from sender; session=${message.sessionId ?? 'none'}; ${describeHostPeerState(peer)}`,
+          'INFO',
+          activePairCodeRef.current || cameraPairCode || 'pending'
+        );
         if (message.sessionId) {
           activeSenderSessionIdRef.current = message.sessionId;
         }
@@ -1777,13 +1881,36 @@ export default function Tournament() {
           offerTimeoutRef.current = null;
         }
         stopOfferResendLoop();
+        reportHostConnectionEvent(
+          'answer-apply-start',
+          `Applying sender answer; session=${message.sessionId ?? 'none'}; ${describeHostPeerState(peer)}`,
+          'INFO',
+          activePairCodeRef.current || cameraPairCode || 'pending'
+        );
         await peer.setRemoteDescription(new RTCSessionDescription(answer));
-        reportHostConnectionEvent('answer-remote-description-set', 'Host applied remote answer description.');
+        reportHostConnectionEvent(
+          'answer-remote-description-set',
+          `Host applied remote answer description; session=${message.sessionId ?? 'none'}; ${describeHostPeerState(peer)}`,
+          'INFO',
+          activePairCodeRef.current || cameraPairCode || 'pending'
+        );
         for (const candidate of pendingIncomingIceCandidatesRef.current) {
           try {
             await peer.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch {
+            reportHostConnectionEvent(
+              'pending-ice-applied',
+              `Applied queued sender ICE candidate; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+              'INFO',
+              activePairCodeRef.current || cameraPairCode || 'pending'
+            );
+          } catch (error) {
             pendingIncomingIceCandidatesRef.current.push(candidate);
+            reportHostConnectionEvent(
+              'pending-ice-requeue',
+              `Queued sender ICE candidate could not be applied yet; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${error instanceof Error ? error.message : 'unknown error'}; ${describeHostPeerState(peer)}`,
+              'WARN',
+              activePairCodeRef.current || cameraPairCode || 'pending'
+            );
           }
         }
         pendingIncomingIceCandidatesRef.current = pendingIncomingIceCandidatesRef.current.filter((candidate, index, list) => list.indexOf(candidate) === index);
@@ -1810,12 +1937,36 @@ export default function Tournament() {
         const candidate = message.payload as RTCIceCandidateInit;
         if (peer.remoteDescription) {
           try {
+            reportHostConnectionEvent(
+              'sender-ice-apply-start',
+              `Applying sender ICE; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+              'INFO',
+              activePairCodeRef.current || cameraPairCode || 'pending'
+            );
             await peer.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch {
+            reportHostConnectionEvent(
+              'sender-ice-applied',
+              `Applied sender ICE; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+              'INFO',
+              activePairCodeRef.current || cameraPairCode || 'pending'
+            );
+          } catch (error) {
             pendingIncomingIceCandidatesRef.current.push(candidate);
+            reportHostConnectionEvent(
+              'sender-ice-requeue',
+              `Unable to apply sender ICE yet; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${error instanceof Error ? error.message : 'unknown error'}; ${describeHostPeerState(peer)}`,
+              'WARN',
+              activePairCodeRef.current || cameraPairCode || 'pending'
+            );
           }
         } else {
           pendingIncomingIceCandidatesRef.current.push(candidate);
+          reportHostConnectionEvent(
+            'sender-ice-queued',
+            `Queued sender ICE until remote description is set; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+            'INFO',
+            activePairCodeRef.current || cameraPairCode || 'pending'
+          );
         }
         return;
       }

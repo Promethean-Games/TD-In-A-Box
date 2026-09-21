@@ -95,6 +95,8 @@ class CameraSenderService : Service() {
     private var hasReceivedHostOffer = false
     private var hasLoggedInboundIce = false
     private var hasLoggedOutboundIce = false
+    private var signalSequence = 0
+    private var localIceSequence = 0
     private var activePairCode: String? = null
     private var activeSessionId: String? = null
     private var activeHostSessionId: String? = null
@@ -268,6 +270,8 @@ class CameraSenderService : Service() {
         hasReceivedHostOffer = false
         hasLoggedInboundIce = false
         hasLoggedOutboundIce = false
+        signalSequence = 0
+        localIceSequence = 0
         activePairCode = pairCode
         activeHostSessionId = null
         reconnectJob?.cancel()
@@ -433,11 +437,17 @@ class CameraSenderService : Service() {
                 override fun onIceCandidate(candidate: IceCandidate) {
                     runCatching {
                         val currentSignalClient = signalClient ?: return@runCatching
+                        localIceSequence += 1
                         if (!hasLoggedOutboundIce) {
                             hasLoggedOutboundIce = true
                             logConnectionReport(
                                 stage = "sender-ice-generated",
-                                detail = "Local ICE candidates are being generated and sent."
+                                detail = "Local ICE candidates are being generated and sent; sequence=$localIceSequence; ${describePeerState(peerConnection)}."
+                            )
+                        } else {
+                            logConnectionReport(
+                                stage = "sender-ice-generated",
+                                detail = "Local ICE candidate #$localIceSequence generated; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(peerConnection)}."
                             )
                         }
                         serviceScope.launch {
@@ -455,10 +465,14 @@ class CameraSenderService : Service() {
                                         }
                                     )
                                 )
+                                logConnectionReport(
+                                    stage = "sender-ice-dispatched",
+                                    detail = "Local ICE candidate #$localIceSequence dispatched to host; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; session=${activeSessionId ?: "none"}; ${describePeerState(peerConnection)}."
+                                )
                             }.onFailure { error ->
                                 logConnectionReport(
                                     stage = "ice-send-failed",
-                                    detail = error.message ?: "Failed to send ICE candidate.",
+                                    detail = "Failed to send ICE candidate #$localIceSequence; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${error.message ?: "unknown error"}; ${describePeerState(peerConnection)}.",
                                     severity = "WARN",
                                     pairCode = activePairCode
                                 )
@@ -476,6 +490,12 @@ class CameraSenderService : Service() {
 
                 override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
                     runCatching {
+                        logConnectionReport(
+                            stage = "peer-connection-state",
+                            detail = "PeerConnection state=${newState.name.lowercase()}; ${describePeerState(peerConnection)}.",
+                            severity = if (newState == PeerConnection.PeerConnectionState.FAILED) "WARN" else "INFO",
+                            pairCode = activePairCode
+                        )
                         when (newState) {
                             PeerConnection.PeerConnectionState.CONNECTED -> {
                                 postOfferConnectionTimeoutJob?.cancel()
@@ -515,7 +535,7 @@ class CameraSenderService : Service() {
                     runCatching {
                         logConnectionReport(
                             stage = "ice-connection-state",
-                            detail = "ICE connection state changed to ${state.name.lowercase()}.",
+                            detail = "ICE connection state changed to ${state.name.lowercase()}; ${describePeerState(peerConnection)}.",
                             severity = if (state == PeerConnection.IceConnectionState.FAILED) "WARN" else "INFO"
                         )
                         if (state == PeerConnection.IceConnectionState.FAILED && !manualDisconnect) {
@@ -550,6 +570,14 @@ class CameraSenderService : Service() {
         if (message.from != "host") return
 
         val pairCode = activePairCode.orEmpty()
+        val currentPeer = peerConnection
+        val currentSignalClient = signalClient
+        signalSequence += 1
+        logConnectionReport(
+            stage = "host-signal-received",
+            detail = "Received host signal #$signalSequence: type=${message.type}; session=${message.sessionId ?: "none"}; activeHostSession=${activeHostSessionId ?: "none"}; activeSenderSession=${activeSessionId ?: "none"}; ${describePeerState(currentPeer)}",
+            pairCode = pairCode
+        )
         if (message.sessionId != null && activeHostSessionId != null && message.sessionId != activeHostSessionId) {
             logConnectionReport(
                 stage = "host-session-stale",
@@ -562,15 +590,8 @@ class CameraSenderService : Service() {
         if (message.sessionId != null) {
             activeHostSessionId = message.sessionId
         }
-
-        logConnectionReport(
-            stage = "host-signal-received",
-            detail = "Received host signal: type=${message.type}; session=${message.sessionId ?: "none"}; activeHostSession=${activeHostSessionId ?: "none"}; payload=${message.payload != null}",
-            pairCode = pairCode
-        )
-
-        val rtcPeer = peerConnection ?: return
-        val currentSignalClient = signalClient ?: return
+        val rtcPeer = currentPeer ?: return
+        val signalTransportClient = currentSignalClient ?: return
         var stopRequested = false
 
         sessionMutex.withLock {
@@ -579,7 +600,7 @@ class CameraSenderService : Service() {
                     if (rtcPeer.signalingState() != PeerConnection.SignalingState.STABLE || rtcPeer.remoteDescription != null) {
                         logConnectionReport(
                             stage = "offer-ignored",
-                            detail = "Host offer ignored because peer state was not stable (${rtcPeer.signalingState()}) or remote description already existed.",
+                            detail = "Host offer ignored because peer state was not stable (${rtcPeer.signalingState()}) or remote description already existed; ${describePeerState(rtcPeer)}.",
                             severity = "WARN",
                             pairCode = pairCode
                         )
@@ -587,7 +608,7 @@ class CameraSenderService : Service() {
                     }
                     logConnectionReport(
                         stage = "offer-received",
-                        detail = "Host offer received; preparing answer for host session ${activeHostSessionId ?: "unknown"}."
+                        detail = "Host offer received; preparing answer for host session ${activeHostSessionId ?: "unknown"}; ${describePeerState(rtcPeer)}."
                     )
                     try {
                         hasReceivedHostOffer = true
@@ -615,7 +636,7 @@ class CameraSenderService : Service() {
                         }
                         logConnectionReport(
                             stage = "remote-description-start",
-                            detail = "Applying remote host offer to the peer connection.",
+                            detail = "Applying remote host offer to the peer connection; ${describePeerState(rtcPeer)}.",
                             pairCode = pairCode
                         )
                         val remoteDescriptionResult = runCatching {
@@ -635,13 +656,13 @@ class CameraSenderService : Service() {
                         }
                         logConnectionReport(
                             stage = "remote-description-set",
-                            detail = "Remote host offer applied successfully.",
+                            detail = "Remote host offer applied successfully; ${describePeerState(rtcPeer)}.",
                             pairCode = pairCode
                         )
                         drainPendingIce(rtcPeer)
                         logConnectionReport(
                             stage = "answer-create-start",
-                            detail = "Creating local answer from the applied host offer.",
+                            detail = "Creating local answer from the applied host offer; ${describePeerState(rtcPeer)}.",
                             pairCode = pairCode
                         )
                         val answerResult = runCatching {
@@ -662,7 +683,7 @@ class CameraSenderService : Service() {
                         val answer = answerResult.getOrThrow()
                         logConnectionReport(
                             stage = "answer-created",
-                            detail = "Local answer created; applying local description.",
+                            detail = "Local answer created; applying local description; ${describePeerState(rtcPeer)}.",
                             pairCode = pairCode
                         )
                         val answerToSend = PairSignalMessagePayload(
@@ -678,7 +699,7 @@ class CameraSenderService : Service() {
                         runCatching { drainPendingIce(rtcPeer) }
                         applyLocalDescriptionAndSendAnswer(
                             rtcPeer = rtcPeer,
-                            signalClient = currentSignalClient,
+                            signalClient = signalTransportClient,
                             answer = answer,
                             answerMessage = answerToSend,
                             pairCode = pairCode
@@ -703,16 +724,28 @@ class CameraSenderService : Service() {
                         hasLoggedInboundIce = true
                         logConnectionReport(
                             stage = "host-ice-received",
-                            detail = "Host ICE candidates are being received.",
+                            detail = "Host ICE candidates are being received; ${describePeerState(rtcPeer)}.",
                             pairCode = pairCode
                         )
                     }
                     if (rtcPeer.remoteDescription != null) {
+                        logConnectionReport(
+                            stage = "host-ice-apply-start",
+                            detail = "Applying host ICE candidate; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(rtcPeer)}.",
+                            pairCode = pairCode
+                        )
                         runCatching { rtcPeer.addIceCandidate(candidate) }
+                            .onSuccess {
+                                logConnectionReport(
+                                    stage = "host-ice-applied",
+                                    detail = "Applied host ICE candidate; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(rtcPeer)}.",
+                                    pairCode = pairCode
+                                )
+                            }
                             .onFailure { error ->
                                 logConnectionReport(
                                     stage = "host-ice-apply-failed",
-                                    detail = error.message ?: "Failed to apply remote ICE candidate.",
+                                    detail = "Failed to apply remote ICE candidate; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${error.message ?: "unknown error"}; ${describePeerState(rtcPeer)}.",
                                     severity = "WARN",
                                     pairCode = pairCode
                                 )
@@ -720,6 +753,11 @@ class CameraSenderService : Service() {
                             }
                     } else {
                         pendingRemoteIce += candidate
+                        logConnectionReport(
+                            stage = "host-ice-queued",
+                            detail = "Queued host ICE candidate until remote description is set; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(rtcPeer)}.",
+                            pairCode = pairCode
+                        )
                     }
                 }
 
@@ -746,7 +784,30 @@ class CameraSenderService : Service() {
         if (pendingRemoteIce.isEmpty()) return
         val queued = pendingRemoteIce.toList()
         pendingRemoteIce.clear()
-        queued.forEach { connection.addIceCandidate(it) }
+        logConnectionReport(
+            stage = "pending-ice-drain",
+            detail = "Draining ${queued.size} queued remote ICE candidates; ${describePeerState(connection)}.",
+            pairCode = activePairCode.orEmpty()
+        )
+        queued.forEachIndexed { index, candidate ->
+            runCatching { connection.addIceCandidate(candidate) }
+                .onSuccess {
+                    logConnectionReport(
+                        stage = "pending-ice-applied",
+                        detail = "Applied queued remote ICE candidate #${index + 1}/${queued.size}; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(connection)}.",
+                        pairCode = activePairCode.orEmpty()
+                    )
+                }
+                .onFailure { error ->
+                    pendingRemoteIce += candidate
+                    logConnectionReport(
+                        stage = "pending-ice-requeue",
+                        detail = "Queued remote ICE candidate #${index + 1}/${queued.size} could not be applied; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${error.message ?: "unknown error"}; ${describePeerState(connection)}.",
+                        severity = "WARN",
+                        pairCode = activePairCode.orEmpty()
+                    )
+                }
+        }
     }
 
     private fun applyLocalDescriptionAndSendAnswer(
@@ -782,7 +843,7 @@ class CameraSenderService : Service() {
                                         detail = "Local answer applied successfully.",
                                         pairCode = pairCode
                                     )
-                                    sendAnswerToHost(signalClient, answerMessage, pairCode)
+                                    sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
                                 }
                             }
                         }
@@ -803,7 +864,7 @@ class CameraSenderService : Service() {
                                         severity = "WARN",
                                         pairCode = pairCode
                                     )
-                                    sendAnswerToHost(signalClient, answerMessage, pairCode)
+                                    sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
                                 }
                             }
                         }
@@ -834,6 +895,7 @@ class CameraSenderService : Service() {
     }
 
     private suspend fun sendAnswerToHost(
+        rtcPeer: PeerConnection,
         signalClient: NativePairSignalClient,
         answerMessage: PairSignalMessagePayload,
         pairCode: String
@@ -857,7 +919,7 @@ class CameraSenderService : Service() {
         )
         logConnectionReport(
             stage = "answer-send-start",
-            detail = "Local answer prepared; sending payload to host.",
+            detail = "Local answer prepared; sending payload to host; ${describePeerState(rtcPeer)}.",
             pairCode = pairCode
         )
         startPostOfferConnectionTimeout(pairCode)
@@ -875,7 +937,7 @@ class CameraSenderService : Service() {
             )
             logConnectionReport(
                 stage = "answer-sent",
-                detail = "Local answer sent to host; waiting for ICE/connection completion.",
+                detail = "Local answer sent to host; waiting for ICE/connection completion; ${describePeerState(rtcPeer)}.",
                 pairCode = pairCode
             )
         } catch (error: Throwable) {
@@ -991,6 +1053,8 @@ class CameraSenderService : Service() {
             hasReceivedHostOffer = false
             hasLoggedInboundIce = false
             hasLoggedOutboundIce = false
+            signalSequence = 0
+            localIceSequence = 0
             stopSessionId = activeSessionId
             activeSessionId = null
             activeHostSessionId = null
@@ -1300,6 +1364,11 @@ private fun JsonObject.toIceCandidate(): IceCandidate? {
     val sdpMid = this["sdpMid"]?.takeUnless { it is JsonNull }?.jsonPrimitive?.content
     val sdpMLineIndex = this["sdpMLineIndex"]?.jsonPrimitive?.int ?: return null
     return IceCandidate(sdpMid, sdpMLineIndex, candidate)
+}
+
+private fun describePeerState(peer: PeerConnection?): String {
+    if (peer == null) return "peer=null"
+    return "signaling=${peer.signalingState().name.lowercase()}; connection=${peer.connectionState().name.lowercase()}; ice=${peer.iceConnectionState().name.lowercase()}"
 }
 
 private fun SessionDescription.Type.canonicalForm(): String = when (this) {
