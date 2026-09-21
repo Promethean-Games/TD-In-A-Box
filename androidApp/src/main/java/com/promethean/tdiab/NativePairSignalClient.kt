@@ -92,6 +92,7 @@ class NativePairSignalClient(
 
     suspend fun send(message: PairSignalMessagePayload) {
         joined.await()
+        val socket = webSocket ?: throw IllegalStateException("Supabase signaling socket is not connected.")
         val frame = PhoenixFrame(
             topic = topic,
             event = "broadcast",
@@ -111,7 +112,11 @@ class NativePairSignalClient(
             ref = nextRef(),
             joinRef = joinRef
         )
-        webSocket?.send(json.encodeToString(PhoenixFrame.serializer(), frame))
+        val encodedFrame = json.encodeToString(PhoenixFrame.serializer(), frame)
+        val queued = socket.send(encodedFrame)
+        if (!queued) {
+            throw IllegalStateException("Supabase signaling socket rejected the outbound signal.")
+        }
     }
 
     suspend fun close() {
