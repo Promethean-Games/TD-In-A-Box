@@ -1781,12 +1781,25 @@ export default function Tournament() {
       activeSenderSessionIdRef.current &&
       message.sessionId !== activeSenderSessionIdRef.current
     ) {
+      const awaitingAnswer =
+        Boolean(currentPeer) &&
+        currentPeer.signalingState === 'have-local-offer' &&
+        !currentPeer.remoteDescription;
       reportHostConnectionEvent(
         'sender-session-rollover',
         `Sender started a new session ${message.sessionId}; replacing prior sender session ${activeSenderSessionIdRef.current}. Host was ${hostAlreadyLinked ? 'already linked' : 'not linked'}.`,
         'WARN',
         activePairCode
       );
+      if (awaitingAnswer && !hostAlreadyLinked) {
+        reportHostConnectionEvent(
+          'sender-session-rollover-pending',
+          `Sender announced ${message.sessionId} while the current host offer is still pending; keeping sender session ${activeSenderSessionIdRef.current} until the handshake resolves.`,
+          'INFO',
+          activePairCode
+        );
+        return;
+      }
       activeSenderSessionIdRef.current = message.sessionId;
       if (!hostAlreadyLinked) {
         await publishHostOffer(activePairCodeRef.current || cameraPairCode || 'pending', 'resend');
