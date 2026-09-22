@@ -1948,6 +1948,22 @@ export default function Tournament() {
         }
         return;
       }
+      if (message.type === 'error') {
+        const payload = (message.payload && typeof message.payload === 'object')
+          ? message.payload as Record<string, unknown>
+          : null;
+        const senderStage = typeof payload?.stage === 'string' ? payload.stage : 'unknown';
+        const senderDetail = typeof payload?.detail === 'string' ? payload.detail : 'Sender reported an unspecified error.';
+        const senderSeverity = typeof payload?.severity === 'string' ? payload.severity : 'WARN';
+        reportHostConnectionEvent(
+          'sender-error-signal',
+          `Sender reported ${senderStage} (${senderSeverity}): ${senderDetail}`,
+          'WARN',
+          activePairCodeRef.current || cameraPairCode || 'pending'
+        );
+        setCameraStatusNote(`Sender error: ${senderStage}`);
+        return;
+      }
       if (message.type === 'stop') {
         reportHostConnectionEvent('sender-stop', 'Sender requested stop.');
         await stopPairingSession(false);

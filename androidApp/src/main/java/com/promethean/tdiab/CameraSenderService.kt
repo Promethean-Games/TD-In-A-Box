@@ -747,6 +747,14 @@ class CameraSenderService : Service() {
                     )
                     try {
                         val payload = message.payload as? JsonObject ?: run {
+                            runCatching {
+                                sendSenderErrorSignal(
+                                    signalClient = signalTransportClient,
+                                    pairCode = pairCode,
+                                    stage = "offer-payload-missing",
+                                    detail = "Host offer payload was missing or malformed."
+                                )
+                            }
                             logConnectionReport(
                                 stage = "offer-payload-missing",
                                 detail = "Host offer payload was missing or malformed.",
@@ -756,6 +764,14 @@ class CameraSenderService : Service() {
                             return@withLock
                         }
                         val sdp = payload["sdp"]?.jsonPrimitive?.content ?: run {
+                            runCatching {
+                                sendSenderErrorSignal(
+                                    signalClient = signalTransportClient,
+                                    pairCode = pairCode,
+                                    stage = "offer-sdp-missing",
+                                    detail = "Host offer was missing the SDP payload."
+                                )
+                            }
                             logConnectionReport(
                                 stage = "offer-sdp-missing",
                                 detail = "Host offer was missing the SDP payload.",
@@ -775,10 +791,20 @@ class CameraSenderService : Service() {
                             }
                         }
                         if (remoteDescriptionResult.isFailure) {
+                            val failureDetail = remoteDescriptionResult.exceptionOrNull()?.message
+                                ?: "Failed to apply remote host offer."
+                            runCatching {
+                                sendSenderErrorSignal(
+                                    signalClient = signalTransportClient,
+                                    pairCode = pairCode,
+                                    stage = "remote-description-failed",
+                                    detail = failureDetail,
+                                    severity = "ERROR"
+                                )
+                            }
                             logConnectionReport(
                                 stage = "remote-description-failed",
-                                detail = remoteDescriptionResult.exceptionOrNull()?.message
-                                    ?: "Failed to apply remote host offer.",
+                                detail = failureDetail,
                                 severity = "ERROR",
                                 pairCode = pairCode
                             )
@@ -809,10 +835,20 @@ class CameraSenderService : Service() {
                             }
                         }
                         if (answerResult.isFailure) {
+                            val failureDetail = answerResult.exceptionOrNull()?.message
+                                ?: "Failed to create local answer."
+                            runCatching {
+                                sendSenderErrorSignal(
+                                    signalClient = signalTransportClient,
+                                    pairCode = pairCode,
+                                    stage = "answer-create-failed",
+                                    detail = failureDetail,
+                                    severity = "ERROR"
+                                )
+                            }
                             logConnectionReport(
                                 stage = "answer-create-failed",
-                                detail = answerResult.exceptionOrNull()?.message
-                                    ?: "Failed to create local answer.",
+                                detail = failureDetail,
                                 severity = "ERROR",
                                 pairCode = pairCode
                             )
@@ -847,9 +883,19 @@ class CameraSenderService : Service() {
                             pairCode = pairCode
                         )
                     } catch (error: Throwable) {
+                        val failureDetail = error.message ?: "Offer handling failed."
+                        runCatching {
+                            sendSenderErrorSignal(
+                                signalClient = signalTransportClient,
+                                pairCode = pairCode,
+                                stage = "offer-handling-failed",
+                                detail = failureDetail,
+                                severity = "ERROR"
+                            )
+                        }
                         logConnectionReport(
                             stage = "offer-handling-failed",
-                            detail = error.message ?: "Offer handling failed.",
+                            detail = failureDetail,
                             severity = "ERROR",
                             pairCode = pairCode
                         )
@@ -980,12 +1026,22 @@ class CameraSenderService : Service() {
                 )
                 sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
             } catch (error: Throwable) {
+                val failureDetail = error.message ?: "PeerConnection.setLocalDescription reported failure."
                 logConnectionReport(
                     stage = "local-description-failed",
-                    detail = error.message ?: "PeerConnection.setLocalDescription reported failure.",
+                    detail = failureDetail,
                     severity = "ERROR",
                     pairCode = pairCode
                 )
+                runCatching {
+                    sendSenderErrorSignal(
+                        signalClient = signalClient,
+                        pairCode = pairCode,
+                        stage = "local-description-failed",
+                        detail = failureDetail,
+                        severity = "ERROR"
+                    )
+                }
                 if (!manualDisconnect) {
                     scheduleReconnect("Local answer application failed.")
                 }
@@ -1059,16 +1115,56 @@ class CameraSenderService : Service() {
                 )
             }
         } catch (error: Throwable) {
+            val failureDetail = error.message ?: "Failed to send answer payload."
             logConnectionReport(
                 stage = "answer-send-failed",
-                detail = error.message ?: "Failed to send answer payload.",
+                detail = failureDetail,
                 severity = "ERROR",
                 pairCode = pairCode
             )
+            runCatching {
+                sendSenderErrorSignal(
+                    signalClient = signalClient,
+                    pairCode = pairCode,
+                    stage = "answer-send-failed",
+                    detail = failureDetail,
+                    severity = "ERROR"
+                )
+            }
             if (!manualDisconnect) {
                 scheduleReconnect("Failed to send answer payload.")
             }
         }
+    }
+
+    private suspend fun sendSenderErrorSignal(
+        signalClient: NativePairSignalClient,
+        pairCode: String,
+        stage: String,
+        detail: String,
+        severity: String = "WARN"
+    ) {
+        val payload = buildJsonObject {
+            put("stage", stage)
+            put("detail", detail)
+            put("severity", severity)
+        }
+        withTimeout(2_500) {
+            signalClient.send(
+                PairSignalMessagePayload(
+                    type = "error",
+                    from = "sender",
+                    payload = payload,
+                    ts = System.currentTimeMillis(),
+                    sessionId = activeSessionId,
+                )
+            )
+        }
+        logConnectionReport(
+            stage = "sender-error-dispatched",
+            detail = "Dispatched sender error signal stage=$stage severity=$severity.",
+            pairCode = pairCode
+        )
     }
 
     private fun scheduleReconnect(reason: String) {
