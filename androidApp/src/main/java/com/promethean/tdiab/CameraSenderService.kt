@@ -1038,6 +1038,10 @@ class CameraSenderService : Service() {
                     detail = "Calling PeerConnection.setLocalDescription with the created local answer.",
                     pairCode = pairCode
                 )
+                dispatchAnswer(
+                    trigger = "pre-local-description",
+                    detail = "Dispatching local answer before setLocalDescription to avoid callback deadlock."
+                )
                 serviceScope.launch(Dispatchers.IO) {
                     delay(2_500)
                     if (!answerDispatched.get()) {
