@@ -1020,6 +1020,13 @@ class CameraSenderService : Service() {
                 }
                 serviceScope.launch(Dispatchers.IO) {
                     runCatching {
+                        sendSenderErrorSignal(
+                            signalClient = signalClient,
+                            pairCode = pairCode,
+                            stage = "answer-dispatch-attempt",
+                            detail = "Attempting answer dispatch via $trigger.",
+                            severity = "INFO"
+                        )
                         sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
                     }.onFailure { error ->
                         logConnectionReport(

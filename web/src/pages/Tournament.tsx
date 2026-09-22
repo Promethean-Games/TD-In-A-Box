@@ -1701,6 +1701,16 @@ export default function Tournament() {
         stopOfferResendLoop();
         return;
       }
+      if (senderReadySeenRef.current) {
+        stopOfferResendLoop();
+        reportHostConnectionEvent(
+          'offer-resend-paused-sender-ready',
+          'Paused periodic offer resend loop because sender is already in ready state and should be negotiating the current offer.',
+          'INFO',
+          pairCode
+        );
+        return;
+      }
       if (offerResendAttemptRef.current >= MAX_RESEND_ATTEMPTS) {
         stopOfferResendLoop();
         reportHostConnectionEvent(
@@ -1806,6 +1816,7 @@ export default function Tournament() {
 
     try {
       if (message.type === 'ready') {
+        const alreadyReady = senderReadySeenRef.current;
         senderReadySeenRef.current = true;
         if (peer.connectionState === 'connected' || peer.remoteDescription) {
           reportHostConnectionEvent(
@@ -1816,6 +1827,16 @@ export default function Tournament() {
           );
           return;
         }
+        if (alreadyReady) {
+          reportHostConnectionEvent(
+            'sender-ready-duplicate-ignored',
+            `Duplicate sender ready ignored while awaiting answer; ${describeHostPeerState(peer)}`,
+            'INFO',
+            activePairCode
+          );
+          return;
+        }
+        stopOfferResendLoop();
         if (message.sessionId) {
           activeSenderSessionIdRef.current = message.sessionId;
         }
