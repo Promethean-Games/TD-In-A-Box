@@ -746,11 +746,6 @@ class CameraSenderService : Service() {
                         detail = "Host offer received; preparing answer for host session ${activeHostSessionId ?: "unknown"}; ${describePeerState(rtcPeer)}."
                     )
                     try {
-                        hasReceivedHostOffer = true
-                        readyAnnouncementJob?.cancel()
-                        readyAnnouncementJob = null
-                        offerTimeoutJob?.cancel()
-                        offerTimeoutJob = null
                         val payload = message.payload as? JsonObject ?: run {
                             logConnectionReport(
                                 stage = "offer-payload-missing",
@@ -787,8 +782,16 @@ class CameraSenderService : Service() {
                                 severity = "ERROR",
                                 pairCode = pairCode
                             )
+                            if (!manualDisconnect) {
+                                startReadyAnnouncements(signalTransportClient, pairCode)
+                            }
                             return@withLock
                         }
+                        hasReceivedHostOffer = true
+                        readyAnnouncementJob?.cancel()
+                        readyAnnouncementJob = null
+                        offerTimeoutJob?.cancel()
+                        offerTimeoutJob = null
                         logConnectionReport(
                             stage = "remote-description-set",
                             detail = "Remote host offer applied successfully; ${describePeerState(rtcPeer)}.",
@@ -813,6 +816,10 @@ class CameraSenderService : Service() {
                                 severity = "ERROR",
                                 pairCode = pairCode
                             )
+                            hasReceivedHostOffer = false
+                            if (!manualDisconnect) {
+                                startReadyAnnouncements(signalTransportClient, pairCode)
+                            }
                             return@withLock
                         }
                         val answer = answerResult.getOrThrow()
