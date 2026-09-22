@@ -207,6 +207,8 @@ export default function Tournament() {
   const offerInFlightRef = useRef(false);
   const offerTimeoutRef = useRef<number | null>(null);
   const offerResendLoopRef = useRef<number | null>(null);
+  const offerResendAttemptRef = useRef(0);
+  const senderReadySeenRef = useRef(false);
   const hostIceSentLoggedRef = useRef(false);
   const senderIceReceivedLoggedRef = useRef(false);
   const liveRelayRef = useRef<HostChannelRelay | null>(null);
@@ -1403,7 +1405,10 @@ export default function Tournament() {
       window.clearTimeout(offerTimeoutRef.current);
       offerTimeoutRef.current = null;
     }
-    stopOfferResendLoop();
+    if (offerResendLoopRef.current !== null) {
+      window.clearInterval(offerResendLoopRef.current);
+      offerResendLoopRef.current = null;
+    }
     const signalClient = pairSignalClientRef.current;
     if (notifySender && signalClient) {
       try {
@@ -1420,6 +1425,8 @@ export default function Tournament() {
     hostSignalSequenceRef.current = 0;
     hostIceSequenceRef.current = 0;
     hostPreviewAttachSequenceRef.current = 0;
+    offerResendAttemptRef.current = 0;
+    senderReadySeenRef.current = false;
     offerInFlightRef.current = false;
     hostIceSentLoggedRef.current = false;
     senderIceReceivedLoggedRef.current = false;
@@ -1448,6 +1455,8 @@ export default function Tournament() {
     hostSignalSequenceRef.current = 0;
     hostIceSequenceRef.current = 0;
     hostPreviewAttachSequenceRef.current = 0;
+    offerResendAttemptRef.current = 0;
+    senderReadySeenRef.current = false;
     hostIceSentLoggedRef.current = false;
     senderIceReceivedLoggedRef.current = false;
     reportHostConnectionEvent('pair-code-generated', 'Host generated new pair code.', 'INFO', nextPairCode);
@@ -1591,21 +1600,30 @@ export default function Tournament() {
     if (offerTimeoutRef.current !== null) {
       window.clearTimeout(offerTimeoutRef.current);
     }
-    offerTimeoutRef.current = window.setTimeout(async () => {
+    offerTimeoutRef.current = window.setTimeout(() => {
       const activePeer = pairPeerRef.current;
       if (!activePeer || activePeer.connectionState === 'connected' || activePeer.remoteDescription) {
         return;
       }
+      const senderReadySeen = senderReadySeenRef.current;
+      stopOfferResendLoop();
       reportHostConnectionEvent(
-        'host-offer-timeout',
-        'No answer received for the active offer within 15 seconds; resetting the pairing session.',
+        senderReadySeen ? 'offer-unanswered-timebox' : 'sender-ready-never-received',
+        senderReadySeen
+          ? 'Fail-fast cutoff: sender reached ready but no answer arrived within 12 seconds after offer publishes.'
+          : 'Fail-fast cutoff: sender ready was never observed within 12 seconds.',
         'WARN',
         pairCode
       );
-      await stopPairingSession(false);
-      await prepareHostPairingSession(pairCode);
-    }, 15000);
-  }, []);
+      setCameraConnectionState('DISCONNECTED');
+      setCameraPairStatus('Pairing timed out (fail-fast).');
+      setCameraStatusNote(
+        senderReadySeen
+          ? 'Sender reached ready, but offer/answer did not complete.'
+          : 'Sender ready was not observed. Verify sender transport and pair code.'
+      );
+    }, 12000);
+  }, [reportHostConnectionEvent]);
 
   const stopOfferResendLoop = useCallback(() => {
     if (offerResendLoopRef.current !== null) {
@@ -1673,7 +1691,9 @@ export default function Tournament() {
   }, [armOfferTimeout, reportHostConnectionEvent]);
 
   const startOfferResendLoop = useCallback((pairCode: string) => {
+    const MAX_RESEND_ATTEMPTS = 6;
     stopOfferResendLoop();
+    offerResendAttemptRef.current = 0;
     offerResendLoopRef.current = window.setInterval(() => {
       const peer = pairPeerRef.current;
       const signalClient = pairSignalClientRef.current;
@@ -1681,6 +1701,22 @@ export default function Tournament() {
         stopOfferResendLoop();
         return;
       }
+      if (offerResendAttemptRef.current >= MAX_RESEND_ATTEMPTS) {
+        stopOfferResendLoop();
+        reportHostConnectionEvent(
+          senderReadySeenRef.current ? 'offer-resend-cutoff' : 'offer-resend-cutoff-no-ready',
+          senderReadySeenRef.current
+            ? `Fail-fast cutoff reached after ${MAX_RESEND_ATTEMPTS} resend attempts without receiving sender answer.`
+            : `Fail-fast cutoff reached after ${MAX_RESEND_ATTEMPTS} resend attempts before sender ready.`,
+          'WARN',
+          pairCode
+        );
+        setCameraConnectionState('DISCONNECTED');
+        setCameraPairStatus('Pairing timed out (resend cutoff).');
+        setCameraStatusNote('Stopped infinite offer resend loop. Check signaling diagnostics.');
+        return;
+      }
+      offerResendAttemptRef.current += 1;
 
       void publishHostOffer(pairCode, 'resend').catch((error) => {
         reportHostConnectionEvent(
@@ -1770,6 +1806,7 @@ export default function Tournament() {
 
     try {
       if (message.type === 'ready') {
+        senderReadySeenRef.current = true;
         if (peer.connectionState === 'connected' || peer.remoteDescription) {
           reportHostConnectionEvent(
             'sender-ready-ignored-linked',

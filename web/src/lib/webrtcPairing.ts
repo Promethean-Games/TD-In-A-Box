@@ -139,7 +139,7 @@ export async function createPairSignalClient(
       return {
         transport: 'supabase',
         send: async (message) => {
-          const result = await channel.send({
+          const wrappedResult = await channel.send({
             type: 'broadcast',
             event: 'signal',
             payload: {
@@ -149,8 +149,22 @@ export async function createPairSignalClient(
               message
             }
           });
-          if (result !== 'ok') {
-            throw new Error(`Supabase signaling send failed: ${typeof result === 'string' ? result : 'unknown result'}.`);
+          if (wrappedResult !== 'ok') {
+            throw new Error(`Supabase signaling send failed for wrapped payload: ${typeof wrappedResult === 'string' ? wrappedResult : 'unknown result'}.`);
+          }
+
+          const directResult = await channel.send({
+            type: 'broadcast',
+            event: 'signal',
+            payload: {
+              version: 1,
+              pairCode: signalSessionKey.replace(/^webrtc-pair-/, ''),
+              sessionId: message.sessionId ?? null,
+              ...message
+            }
+          });
+          if (directResult !== 'ok') {
+            throw new Error(`Supabase signaling send failed for direct payload: ${typeof directResult === 'string' ? directResult : 'unknown result'}.`);
           }
         },
         close: () => {
