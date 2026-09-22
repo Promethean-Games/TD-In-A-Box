@@ -55,6 +55,7 @@ import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -1006,48 +1007,105 @@ class CameraSenderService : Service() {
         pairCode: String
     ) {
         serviceScope.launch(Dispatchers.IO) {
+            val answerDispatched = AtomicBoolean(false)
+            fun dispatchAnswer(trigger: String, detail: String? = null, severity: String = "INFO") {
+                if (!answerDispatched.compareAndSet(false, true)) return
+                if (detail != null) {
+                    logConnectionReport(
+                        stage = "answer-dispatch-fallback",
+                        detail = "Dispatching answer via $trigger; $detail",
+                        severity = severity,
+                        pairCode = pairCode
+                    )
+                }
+                serviceScope.launch(Dispatchers.IO) {
+                    runCatching {
+                        sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
+                    }.onFailure { error ->
+                        logConnectionReport(
+                            stage = "answer-dispatch-failed",
+                            detail = error.message ?: "Answer dispatch failed after $trigger.",
+                            severity = "ERROR",
+                            pairCode = pairCode
+                        )
+                    }
+                }
+            }
+
             try {
                 logConnectionReport(
                     stage = "local-description-native-call-start",
                     detail = "Calling PeerConnection.setLocalDescription with the created local answer.",
                     pairCode = pairCode
                 )
-                val localDescriptionApplied = runCatching {
-                    withTimeout(2_500) {
-                        rtcPeer.setLocalDescriptionAwait(answer)
-                    }
-                }
-                if (localDescriptionApplied.isSuccess) {
-                    logConnectionReport(
-                        stage = "local-description-callback-success",
-                        detail = "PeerConnection.setLocalDescription reported success.",
-                        pairCode = pairCode
-                    )
-                    runCatching { drainPendingIce(rtcPeer) }
-                    logConnectionReport(
-                        stage = "local-description-set",
-                        detail = "Local answer applied successfully.",
-                        pairCode = pairCode
-                    )
-                } else {
-                    val detail = localDescriptionApplied.exceptionOrNull()?.message
-                        ?: "Timed out waiting for local description callback."
-                    logConnectionReport(
-                        stage = "local-description-timeout-fallback",
-                        detail = "Proceeding with answer dispatch despite local description wait failure: $detail",
-                        severity = "WARN",
-                        pairCode = pairCode
-                    )
-                    runCatching {
-                        sendSenderErrorSignal(
-                            signalClient = signalClient,
-                            pairCode = pairCode,
+                rtcPeer.setLocalDescription(
+                    object : SdpObserver {
+                        override fun onCreateSuccess(sessionDescription: SessionDescription?) = Unit
+
+                        override fun onSetSuccess() {
+                            logConnectionReport(
+                                stage = "local-description-callback-success",
+                                detail = "PeerConnection.setLocalDescription reported success.",
+                                pairCode = pairCode
+                            )
+                            serviceScope.launch(Dispatchers.IO) {
+                                runCatching { drainPendingIce(rtcPeer) }
+                            }
+                            logConnectionReport(
+                                stage = "local-description-set",
+                                detail = "Local answer applied successfully.",
+                                pairCode = pairCode
+                            )
+                            dispatchAnswer("local-description-callback-success")
+                        }
+
+                        override fun onSetFailure(error: String?) {
+                            val failureDetail = error ?: "PeerConnection.setLocalDescription reported failure."
+                            logConnectionReport(
+                                stage = "local-description-failed",
+                                detail = failureDetail,
+                                severity = "ERROR",
+                                pairCode = pairCode
+                            )
+                            serviceScope.launch(Dispatchers.IO) {
+                                runCatching {
+                                    sendSenderErrorSignal(
+                                        signalClient = signalClient,
+                                        pairCode = pairCode,
+                                        stage = "local-description-failed",
+                                        detail = failureDetail,
+                                        severity = "ERROR"
+                                    )
+                                }
+                            }
+                            dispatchAnswer("local-description-callback-failure", failureDetail, "WARN")
+                        }
+
+                        override fun onCreateFailure(error: String?) = Unit
+                    },
+                    answer
+                )
+                serviceScope.launch(Dispatchers.IO) {
+                    delay(2_500)
+                    if (!answerDispatched.get()) {
+                        val detail = "Timed out waiting for local-description callback."
+                        logConnectionReport(
                             stage = "local-description-timeout-fallback",
-                            detail = detail
+                            detail = "Proceeding with answer dispatch despite callback timeout.",
+                            severity = "WARN",
+                            pairCode = pairCode
                         )
+                        runCatching {
+                            sendSenderErrorSignal(
+                                signalClient = signalClient,
+                                pairCode = pairCode,
+                                stage = "local-description-timeout-fallback",
+                                detail = detail
+                            )
+                        }
+                        dispatchAnswer("local-description-timeout", detail, "WARN")
                     }
                 }
-                sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
             } catch (error: Throwable) {
                 val failureDetail = error.message ?: "PeerConnection.setLocalDescription reported failure."
                 logConnectionReport(
@@ -1065,9 +1123,7 @@ class CameraSenderService : Service() {
                         severity = "ERROR"
                     )
                 }
-                if (!manualDisconnect) {
-                    scheduleReconnect("Local answer application failed.")
-                }
+                dispatchAnswer("local-description-throw", failureDetail, "WARN")
             }
         }
     }
