@@ -11,10 +11,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
@@ -60,6 +62,13 @@ class NativePairSignalClient(
     private val onSignalMessage: suspend (PairSignalMessagePayload) -> Unit,
     private val onTransportFailure: (String?) -> Unit
 ) {
+    private data class ParsedPhoenixFrame(
+        val topic: String,
+        val event: String,
+        val payload: JsonObject,
+        val ref: String?
+    )
+
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
@@ -216,6 +225,26 @@ class NativePairSignalClient(
         return null
     }
 
+    private fun decodePhoenixFrame(text: String): ParsedPhoenixFrame? {
+        val parsed = runCatching { json.parseToJsonElement(text) }.getOrNull() ?: return null
+        val parsedObject = parsed as? JsonObject
+        if (parsedObject != null) {
+            val topic = parsedObject["topic"]?.jsonPrimitive?.contentOrNull ?: return null
+            val event = parsedObject["event"]?.jsonPrimitive?.contentOrNull ?: return null
+            val payload = parsedObject["payload"] as? JsonObject ?: buildJsonObject { }
+            val ref = parsedObject["ref"]?.jsonPrimitive?.contentOrNull
+            return ParsedPhoenixFrame(topic = topic, event = event, payload = payload, ref = ref)
+        }
+
+        val parsedArray = parsed as? JsonArray ?: return null
+        if (parsedArray.size < 5) return null
+        val topic = parsedArray.getOrNull(2)?.jsonPrimitive?.contentOrNull ?: return null
+        val event = parsedArray.getOrNull(3)?.jsonPrimitive?.contentOrNull ?: return null
+        val payload = parsedArray.getOrNull(4) as? JsonObject ?: buildJsonObject { }
+        val ref = parsedArray.getOrNull(1)?.jsonPrimitive?.contentOrNull
+        return ParsedPhoenixFrame(topic = topic, event = event, payload = payload, ref = ref)
+    }
+
     private fun logSignalTrace(stage: String, detail: String, severity: String = "INFO") {
         ApplicationReportHub.recordConnection(
             pairCode = pairCode,
@@ -276,14 +305,18 @@ class NativePairSignalClient(
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            val frame = try {
-                json.decodeFromString(PhoenixFrame.serializer(), text)
-            } catch (_: Throwable) {
+            val frame = decodePhoenixFrame(text)
+            if (frame == null) {
+                logSignalTrace(
+                    "native-signal-frame-decode-failed",
+                    "Unable to decode inbound realtime frame; rawPrefix=${text.take(240)}",
+                    "WARN"
+                )
                 return
             }
 
             if (frame.event == "phx_reply" && frame.ref == joinRef) {
-                val status = frame.payload["status"]?.toString()?.trim('"')
+                val status = frame.payload["status"]?.jsonPrimitive?.contentOrNull
                 if (status == "ok" && !joined.isCompleted) {
                     joined.complete(Unit)
                     startHeartbeat()
