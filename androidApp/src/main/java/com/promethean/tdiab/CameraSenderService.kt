@@ -1008,9 +1008,8 @@ class CameraSenderService : Service() {
         pairCode: String
     ) {
         serviceScope.launch(Dispatchers.IO) {
-            val answerDispatched = answerDispatchGuard
             fun dispatchAnswer(trigger: String, detail: String? = null, severity: String = "INFO") {
-                if (!answerDispatched.compareAndSet(false, true)) {
+                if (!answerDispatchGuard.compareAndSet(false, true)) {
                     logConnectionReport(
                         stage = "answer-dispatch-skipped",
                         detail = "Ignoring duplicate answer dispatch trigger $trigger; answer send is already in-flight.",
@@ -1027,10 +1026,10 @@ class CameraSenderService : Service() {
                     pairCode = pairCode
                 )
                 serviceScope.launch(Dispatchers.IO) {
-                    runCatching {
+                    try {
                         sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
-                    }.onFailure { error ->
-                        answerDispatched.set(false)
+                    } catch (error: Throwable) {
+                        answerDispatchGuard.set(false)
                         logConnectionReport(
                             stage = "answer-dispatch-failed",
                             detail = error.message ?: "Answer dispatch failed after $trigger.",
@@ -1049,7 +1048,7 @@ class CameraSenderService : Service() {
                 )
                 serviceScope.launch(Dispatchers.IO) {
                     delay(2_500)
-                    if (!answerDispatched.get()) {
+                    if (!answerDispatchGuard.get()) {
                         val detail = "Timed out waiting for local-description callback."
                         logConnectionReport(
                             stage = "local-description-timeout-fallback",
@@ -1086,7 +1085,7 @@ class CameraSenderService : Service() {
                                 detail = "Local answer applied successfully.",
                                 pairCode = pairCode
                             )
-                            if (!answerDispatched.get()) {
+                            if (!answerDispatchGuard.get()) {
                                 dispatchAnswer("local-description-callback-success")
                             }
                         }
@@ -1110,7 +1109,7 @@ class CameraSenderService : Service() {
                                     )
                                 }
                             }
-                            if (!answerDispatched.get()) {
+                            if (!answerDispatchGuard.get()) {
                                 dispatchAnswer("local-description-callback-failure", failureDetail, "WARN")
                             }
                         }
@@ -1136,7 +1135,7 @@ class CameraSenderService : Service() {
                         severity = "ERROR"
                     )
                 }
-                if (!answerDispatched.get()) {
+                if (!answerDispatchGuard.get()) {
                     dispatchAnswer("local-description-throw", failureDetail, "WARN")
                 }
             }
