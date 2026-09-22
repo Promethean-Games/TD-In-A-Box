@@ -25,7 +25,7 @@ export interface ApplicationReport {
 }
 
 const APPLICATION_REPORTS_KEY = 'tdiab_application_reports';
-const REPORT_QUERY_LIMIT = 10000;
+const REPORT_QUERY_LIMIT = 500;
 const MAX_STORED_REPORTS = 10000;
 
 export function formatApplicationReportTimestamp(occurredAt: string): string {
@@ -95,22 +95,7 @@ export function normalizeApplicationReport(
   };
 }
 
-export async function listApplicationReports(): Promise<ApplicationReport[]> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from('application_reports')
-      .select('*')
-      .order('occurred_at', { ascending: false })
-      .limit(REPORT_QUERY_LIMIT);
-
-    if (error) {
-      const detailSuffix = error.details ? ` (${error.details})` : '';
-      throw new Error(`Supabase reports query failed: ${error.message}${detailSuffix}`);
-    }
-
-    return (data ?? []).map((report) => normalizeApplicationReport(report as Record<string, unknown>));
-  }
-
+function readStoredApplicationReports(): ApplicationReport[] {
   if (typeof window === 'undefined') {
     return [];
   }
@@ -126,6 +111,33 @@ export async function listApplicationReports(): Promise<ApplicationReport[]> {
   } catch {
     return [];
   }
+}
+
+export function readCachedApplicationReports(): ApplicationReport[] {
+  return readStoredApplicationReports();
+}
+
+export async function listApplicationReports(): Promise<ApplicationReport[]> {
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase
+      .from('application_reports')
+      .select('id,occurred_at,source,severity,title,summary,exception_class,message,stack_trace,thread_name,package_name,app_name,version_name,version_code,build_type,device_model,device_manufacturer,android_version,sdk_int,file_path,upload_status')
+      .order('occurred_at', { ascending: false })
+      .limit(REPORT_QUERY_LIMIT);
+
+    if (error) {
+      const detailSuffix = error.details ? ` (${error.details})` : '';
+      throw new Error(`Supabase reports query failed: ${error.message}${detailSuffix}`);
+    }
+
+    return (data ?? []).map((report) => normalizeApplicationReport(report as Record<string, unknown>));
+  }
+
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  return readStoredApplicationReports();
 }
 
 export function persistApplicationReports(reports: ApplicationReport[]): void {
