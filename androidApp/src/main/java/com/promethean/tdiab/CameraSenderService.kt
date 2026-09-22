@@ -96,6 +96,7 @@ class CameraSenderService : Service() {
     private var postOfferConnectionTimeoutJob: Job? = null
     private val answerDispatchGuard = AtomicBoolean(false)
     private var hasReceivedHostOffer = false
+    private var hasReceivedHostSignal = false
     private var hasLoggedInboundIce = false
     private var hasLoggedOutboundIce = false
     private var signalSequence = 0
@@ -310,6 +311,7 @@ class CameraSenderService : Service() {
 
         manualDisconnect = false
         hasReceivedHostOffer = false
+        hasReceivedHostSignal = false
         hasLoggedInboundIce = false
         hasLoggedOutboundIce = false
         signalSequence = 0
@@ -490,7 +492,7 @@ class CameraSenderService : Service() {
                 detail = "Signaling transport restored for sender session ${sessionId ?: "none"}.",
                 pairCode = pairCode
             )
-            if (!hasReceivedHostOffer) {
+            if (!hasReceivedHostSignal && !hasReceivedHostOffer) {
                 startReadyAnnouncements(replacementClient, pairCode)
             }
         } catch (error: Throwable) {
@@ -699,6 +701,14 @@ class CameraSenderService : Service() {
         val pairCode = activePairCode.orEmpty()
         val currentPeer = peerConnection
         val currentSignalClient = signalClient
+        if (!hasReceivedHostSignal) {
+            hasReceivedHostSignal = true
+            logConnectionReport(
+                stage = "host-signal-observed",
+                detail = "First host signal observed; pausing ready announcements while the handshake resolves.",
+                pairCode = pairCode
+            )
+        }
         signalSequence += 1
         logConnectionReport(
             stage = "host-signal-received",
@@ -1272,6 +1282,7 @@ class CameraSenderService : Service() {
         val pairCode = activePairCode ?: return
         val hasLinkedSession = peerConnection?.remoteDescription != null ||
             hasReceivedHostOffer ||
+            hasReceivedHostSignal ||
             _uiState.value.connectionState == SenderConnectionState.CONNECTED
         if (hasLinkedSession) {
             logConnectionReport(
@@ -1317,6 +1328,15 @@ class CameraSenderService : Service() {
                 logConnectionReport(
                     stage = "reconnect-skipped-connected",
                     detail = "Skipped reconnect because sender is already connected.",
+                    severity = "INFO",
+                    pairCode = pairCode
+                )
+                return@launch
+            }
+            if (hasReceivedHostSignal) {
+                logConnectionReport(
+                    stage = "reconnect-skipped-host-handshake",
+                    detail = "Skipped reconnect because the sender is already in an active host handshake.",
                     severity = "INFO",
                     pairCode = pairCode
                 )
@@ -1373,6 +1393,7 @@ class CameraSenderService : Service() {
             postOfferConnectionTimeoutJob?.cancel()
             postOfferConnectionTimeoutJob = null
             hasReceivedHostOffer = false
+            hasReceivedHostSignal = false
             hasLoggedInboundIce = false
             hasLoggedOutboundIce = false
             signalSequence = 0
@@ -1573,7 +1594,11 @@ class CameraSenderService : Service() {
         readyAnnouncementJob?.cancel()
         readyAnnouncementJob = serviceScope.launch {
             var announceCount = 0
-            while (!manualDisconnect && !hasReceivedHostOffer && activePairCode == pairCode) {
+            while (!manualDisconnect &&
+                !hasReceivedHostSignal &&
+                !hasReceivedHostOffer &&
+                activePairCode == pairCode
+            ) {
                 try {
                     signalClient.send(
                         PairSignalMessagePayload(
@@ -1612,7 +1637,11 @@ class CameraSenderService : Service() {
         offerTimeoutJob?.cancel()
         offerTimeoutJob = serviceScope.launch {
             delay(18_000)
-            if (!manualDisconnect && !hasReceivedHostOffer && activePairCode == pairCode) {
+            if (!manualDisconnect &&
+                !hasReceivedHostSignal &&
+                !hasReceivedHostOffer &&
+                activePairCode == pairCode
+            ) {
                 logConnectionReport(
                     stage = "offer-timeout",
                     detail = "No host offer received after waiting for signaling handshake.",
@@ -1634,7 +1663,11 @@ class CameraSenderService : Service() {
         postOfferConnectionTimeoutJob?.cancel()
         postOfferConnectionTimeoutJob = serviceScope.launch {
             delay(20_000)
-            if (!manualDisconnect && activePairCode == pairCode && _uiState.value.connectionState != SenderConnectionState.CONNECTED) {
+            if (!manualDisconnect &&
+                !hasReceivedHostSignal &&
+                activePairCode == pairCode &&
+                _uiState.value.connectionState != SenderConnectionState.CONNECTED
+            ) {
                 logConnectionReport(
                     stage = "post-offer-timeout",
                     detail = "Offer/answer exchange happened, but peer connection did not reach CONNECTED.",
