@@ -10,3 +10,5 @@ local.properties
 *.log
 pasted_image_*.png
 web/.env.local
+supabase/functions/.env
+supabase/functions/.env.local

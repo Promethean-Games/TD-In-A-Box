@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { DEFAULT_ICE_SERVERS } from '@/lib/webrtcPairing';
+import { getTemporaryIceConfiguration } from '@/lib/turnIce';
 
 type RelayMessageType =
   | 'viewer-ready'
@@ -108,7 +108,10 @@ export async function createHostChannelRelay(
 
   const createPeerForViewer = async (viewerId: string) => {
     closeViewerPeer(viewerId);
-    const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+    const iceConfiguration = await getTemporaryIceConfiguration({
+      onDiagnostic: (message) => onError?.(message)
+    });
+    const peer = new RTCPeerConnection({ iceServers: iceConfiguration.iceServers });
     peersByViewerId.set(viewerId, peer);
     addTracksToPeer(peer, currentStream);
 
@@ -210,7 +213,10 @@ export async function createViewerChannelRelay(
 ): Promise<ViewerChannelRelay> {
   const relayChannel = await subscribeRelayChannel(createRelayChannelKey(channelId));
   const viewerId = randomRelayId();
-  const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+  const iceConfiguration = await getTemporaryIceConfiguration({
+    onDiagnostic: (message) => onError?.(message)
+  });
+  const peer = new RTCPeerConnection({ iceServers: iceConfiguration.iceServers });
   let isClosed = false;
 
   peer.ontrack = (event) => {

@@ -61,7 +61,6 @@ import {
 import { useTournamentStore } from '@/store/tournamentStore';
 import {
   createPairSignalClient,
-  DEFAULT_ICE_SERVERS,
   generatePairCode,
   generatePairSessionId,
   type PairSignalClient,
@@ -72,6 +71,8 @@ import { getAppRouteUrl } from '@/lib/appPaths';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { getPairingAvailabilityError } from '@/lib/webrtcPairing';
 import { createApplicationReport } from '@/lib/applicationReports';
+import { getTemporaryIceConfiguration } from '@/lib/turnIce';
+import { describeIceCandidate, describeSelectedCandidatePair } from '@/lib/webrtcDiagnostics';
 import './Tournament.css';
 
 const SEEDING_OPTIONS: { value: TournamentSeedMode; label: string }[] = [
@@ -1467,7 +1468,19 @@ export default function Tournament() {
     pairSignalClientRef.current = signalClient;
     reportHostConnectionEvent('signal-client-ready', `Signal client ready using ${signalClient.transport}.`, 'INFO', nextPairCode);
 
-    const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+    const turnIceConfiguration = await getTemporaryIceConfiguration({
+      onDiagnostic: (message) => {
+        reportHostConnectionEvent('turn-ice-config-fallback', message, 'WARN', nextPairCode);
+      }
+    });
+    reportHostConnectionEvent(
+      'turn-ice-config',
+      `Host using ${turnIceConfiguration.source === 'cloudflare-turn' ? 'temporary Cloudflare' : 'legacy fallback'} ICE configuration; serverCount=${turnIceConfiguration.iceServers.length}.`,
+      turnIceConfiguration.source === 'cloudflare-turn' ? 'INFO' : 'WARN',
+      nextPairCode
+    );
+
+    const peer = new RTCPeerConnection({ iceServers: turnIceConfiguration.iceServers });
     pairPeerRef.current = peer;
     peer.ontrack = (event) => {
       const incomingStream = event.streams?.[0] ?? new MediaStream();
@@ -1512,7 +1525,7 @@ export default function Tournament() {
       hostIceSequenceRef.current += 1;
       reportHostConnectionEvent(
         'host-ice-generated',
-        `Generated host ICE candidate #${hostIceSequenceRef.current}; mid=${event.candidate.sdpMid ?? 'none'}; index=${event.candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+        `Generated host ICE candidate #${hostIceSequenceRef.current}; mid=${event.candidate.sdpMid ?? 'none'}; index=${event.candidate.sdpMLineIndex}; ${describeIceCandidate(event.candidate)}; ${describeHostPeerState(peer)}`,
         'INFO',
         nextPairCode
       );
@@ -1530,7 +1543,7 @@ export default function Tournament() {
       } else {
         reportHostConnectionEvent(
           'host-ice-dispatched',
-          `Dispatched host ICE candidate #${hostIceSequenceRef.current}; session=${activeHostSessionIdRef.current}; ${describeHostPeerState(peer)}`,
+          `Dispatched host ICE candidate #${hostIceSequenceRef.current}; session=${activeHostSessionIdRef.current}; ${describeIceCandidate(event.candidate)}; ${describeHostPeerState(peer)}`,
           'INFO',
           nextPairCode
         );
@@ -1549,6 +1562,10 @@ export default function Tournament() {
         setCameraStatusNote('Remote camera connected and streaming.');
         offerInFlightRef.current = false;
         reportHostConnectionEvent('host-peer-connected', 'Host WebRTC peer reached connected state.', 'INFO', nextPairCode);
+        void describeSelectedCandidatePair(peer).then((summary) => {
+          if (!summary) return;
+          reportHostConnectionEvent('host-selected-candidate-pair', `${summary}; ${describeHostPeerState(peer)}`, 'INFO', nextPairCode);
+        });
       } else if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
         setCameraPairStatus(`Pairing ${peer.connectionState}.`);
         setCameraConnectionState('DISCONNECTED');
@@ -1569,6 +1586,12 @@ export default function Tournament() {
         peer.iceConnectionState === 'failed' ? 'WARN' : 'INFO',
         nextPairCode
       );
+      if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
+        void describeSelectedCandidatePair(peer).then((summary) => {
+          if (!summary) return;
+          reportHostConnectionEvent('host-selected-candidate-pair', `${summary}; ${describeHostPeerState(peer)}`, 'INFO', nextPairCode);
+        });
+      }
     };
     peer.onicegatheringstatechange = () => {
       reportHostConnectionEvent(
@@ -1906,12 +1929,16 @@ export default function Tournament() {
           'INFO',
           activePairCodeRef.current || cameraPairCode || 'pending'
         );
+        void describeSelectedCandidatePair(peer).then((summary) => {
+          if (!summary) return;
+          reportHostConnectionEvent('host-selected-candidate-pair', `${summary}; ${describeHostPeerState(peer)}`, 'INFO', activePairCodeRef.current || cameraPairCode || 'pending');
+        });
         for (const candidate of pendingIncomingIceCandidatesRef.current) {
           try {
             await peer.addIceCandidate(new RTCIceCandidate(candidate));
             reportHostConnectionEvent(
               'pending-ice-applied',
-              `Applied queued sender ICE candidate; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+              `Applied queued sender ICE candidate; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${describeHostPeerState(peer)}`,
               'INFO',
               activePairCodeRef.current || cameraPairCode || 'pending'
             );
@@ -1919,7 +1946,7 @@ export default function Tournament() {
             pendingIncomingIceCandidatesRef.current.push(candidate);
             reportHostConnectionEvent(
               'pending-ice-requeue',
-              `Queued sender ICE candidate could not be applied yet; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${error instanceof Error ? error.message : 'unknown error'}; ${describeHostPeerState(peer)}`,
+              `Queued sender ICE candidate could not be applied yet; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${error instanceof Error ? error.message : 'unknown error'}; ${describeHostPeerState(peer)}`,
               'WARN',
               activePairCodeRef.current || cameraPairCode || 'pending'
             );
@@ -1951,14 +1978,14 @@ export default function Tournament() {
           try {
             reportHostConnectionEvent(
               'sender-ice-apply-start',
-              `Applying sender ICE; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+              `Applying sender ICE; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${describeHostPeerState(peer)}`,
               'INFO',
               activePairCodeRef.current || cameraPairCode || 'pending'
             );
             await peer.addIceCandidate(new RTCIceCandidate(candidate));
             reportHostConnectionEvent(
               'sender-ice-applied',
-              `Applied sender ICE; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+              `Applied sender ICE; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${describeHostPeerState(peer)}`,
               'INFO',
               activePairCodeRef.current || cameraPairCode || 'pending'
             );
@@ -1966,7 +1993,7 @@ export default function Tournament() {
             pendingIncomingIceCandidatesRef.current.push(candidate);
             reportHostConnectionEvent(
               'sender-ice-requeue',
-              `Unable to apply sender ICE yet; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${error instanceof Error ? error.message : 'unknown error'}; ${describeHostPeerState(peer)}`,
+              `Unable to apply sender ICE yet; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${error instanceof Error ? error.message : 'unknown error'}; ${describeHostPeerState(peer)}`,
               'WARN',
               activePairCodeRef.current || cameraPairCode || 'pending'
             );
@@ -1975,7 +2002,7 @@ export default function Tournament() {
           pendingIncomingIceCandidatesRef.current.push(candidate);
           reportHostConnectionEvent(
             'sender-ice-queued',
-            `Queued sender ICE until remote description is set; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeHostPeerState(peer)}`,
+            `Queued sender ICE until remote description is set; candidateMid=${candidate.sdpMid ?? 'none'}; candidateIndex=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${describeHostPeerState(peer)}`,
             'INFO',
             activePairCodeRef.current || cameraPairCode || 'pending'
           );

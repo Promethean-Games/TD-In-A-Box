@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   createPairSignalClient,
-  DEFAULT_ICE_SERVERS,
   generatePairSessionId,
   getPairSignalDiagnostics,
   getPairingAvailabilityError,
@@ -10,6 +9,9 @@ import {
   type PairSignalMessage
 } from '@/lib/webrtcPairing';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import { createApplicationReport } from '@/lib/applicationReports';
+import { getTemporaryIceConfiguration } from '@/lib/turnIce';
+import { describeIceCandidate, describeSelectedCandidatePair } from '@/lib/webrtcDiagnostics';
 import './CameraSender.css';
 
 type FullscreenDoc = Document & {
@@ -215,6 +217,42 @@ export default function CameraSender() {
     : isConnecting
       ? 'Securing camera and host session'
       : 'Waiting for your tournament broadcast to pair';
+
+  const reportSenderConnectionEvent = (
+    stage: string,
+    detail: string,
+    severity: 'INFO' | 'WARN' | 'ERROR' | 'FATAL' = 'INFO',
+    pairCodeOverride?: string
+  ) => {
+    const pairCode = pairCodeOverride ?? effectivePairCode ?? 'pending';
+    void createApplicationReport({
+      occurred_at: new Date().toISOString(),
+      source: 'web-sender-connection',
+      severity,
+      title: `Sender connection event: ${stage}`,
+      summary: detail,
+      exception_class: 'SenderConnectionEvent',
+      message: detail,
+      stack_trace: `stage=${stage}; pairCode=${pairCode}; detail=${detail}`,
+      thread_name: 'main',
+      package_name: 'web.tdiab.sender',
+      app_name: 'TD in a Box Sender',
+      version_name: '1.0',
+      version_code: 1,
+      build_type: import.meta.env.MODE || 'web',
+      device_model: navigator.userAgent,
+      device_manufacturer: navigator.platform,
+      android_version: 'n/a',
+      sdk_int: 0,
+      file_path: `sender:${pairCode}`,
+      upload_status: 'synced'
+    });
+  };
+
+  const describeSenderPeerState = (peer: RTCPeerConnection | null | undefined) => {
+    if (!peer) return 'peer=none';
+    return `peerState=${peer.connectionState}; iceState=${peer.iceConnectionState}; signalingState=${peer.signalingState}; gatheringState=${peer.iceGatheringState}`;
+  };
 
   const scrollToSection = (element: HTMLElement | null) => {
     if (!element) return;
@@ -470,6 +508,11 @@ export default function CameraSender() {
 
     if (message.sessionId) {
       if (hostSessionIdRef.current && message.sessionId !== hostSessionIdRef.current) {
+        reportSenderConnectionEvent(
+          'host-session-stale',
+          `Ignoring stale host signal session ${message.sessionId}; active session is ${hostSessionIdRef.current}.`,
+          'WARN'
+        );
         return;
       }
       hostSessionIdRef.current = message.sessionId;
@@ -482,11 +525,21 @@ export default function CameraSender() {
       if (message.type === 'offer') {
         const offer = message.payload as RTCSessionDescriptionInit;
         if (!message.sessionId || message.sessionId !== hostSessionIdRef.current) {
+          reportSenderConnectionEvent('offer-ignored-missing-session', 'Ignored host offer without an active sender session.', 'WARN');
           return;
         }
         if (peer.signalingState !== 'stable' || peer.remoteDescription) {
+          reportSenderConnectionEvent(
+            'offer-ignored-unstable',
+            `Ignored host offer because peer state was not stable; ${describeSenderPeerState(peer)}`,
+            'WARN'
+          );
           return;
         }
+        reportSenderConnectionEvent(
+          'offer-received',
+          `Received host offer for session=${message.sessionId}; ${describeSenderPeerState(peer)}`
+        );
         await peer.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
@@ -497,24 +550,46 @@ export default function CameraSender() {
           ts: Date.now(),
           sessionId: senderSessionIdRef.current || hostSessionIdRef.current
         });
+        reportSenderConnectionEvent(
+          'answer-sent',
+          `Sender answer sent to host; session=${senderSessionIdRef.current || hostSessionIdRef.current}; ${describeSenderPeerState(peer)}`
+        );
         setStatus('Answer sent. Finishing connection...');
         await flushPendingIceCandidates(peer);
         return;
       }
       if (message.type === 'ice' && message.payload) {
         const candidate = message.payload as RTCIceCandidateInit;
+        reportSenderConnectionEvent(
+          'host-ice-received',
+          `Received host ICE candidate; ${describeIceCandidate(candidate)}; ${describeSenderPeerState(peer)}`
+        );
         if (peer.remoteDescription) {
           await peer.addIceCandidate(new RTCIceCandidate(candidate));
+          reportSenderConnectionEvent(
+            'host-ice-applied',
+            `Applied host ICE candidate; ${describeIceCandidate(candidate)}; ${describeSenderPeerState(peer)}`
+          );
         } else {
           pendingIceCandidatesRef.current.push(candidate);
+          reportSenderConnectionEvent(
+            'host-ice-queued',
+            `Queued host ICE candidate until remote description is set; ${describeIceCandidate(candidate)}; ${describeSenderPeerState(peer)}`
+          );
         }
         return;
       }
       if (message.type === 'stop') {
+        reportSenderConnectionEvent('host-stop', 'Host requested sender stop.', 'WARN');
         manualStopRef.current = true;
         await stopSession(false);
       }
     } catch (err) {
+      reportSenderConnectionEvent(
+        'signal-processing-failed',
+        err instanceof Error ? err.message : 'Failed to process host signal.',
+        'ERROR'
+      );
       setError(err instanceof Error ? err.message : 'Failed to process host signal.');
     }
   };
@@ -572,12 +647,40 @@ export default function CameraSender() {
       const signalClient = await createPairSignalClient(nextPairCode, handleSignalMessage);
       signalClientRef.current = signalClient;
       setSignalTransport(signalClient.transport);
+      reportSenderConnectionEvent('signal-client-ready', `Signal client ready using ${signalClient.transport}.`, 'INFO', nextPairCode);
 
-      const peer = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+      const turnIceConfiguration = await getTemporaryIceConfiguration({
+        onDiagnostic: (message) => {
+          reportSenderConnectionEvent('turn-ice-config-fallback', message, 'WARN', nextPairCode);
+        }
+      });
+      reportSenderConnectionEvent(
+        'turn-ice-config',
+        `Sender using ${turnIceConfiguration.source === 'cloudflare-turn' ? 'temporary Cloudflare' : 'legacy fallback'} ICE configuration; serverCount=${turnIceConfiguration.iceServers.length}.`,
+        turnIceConfiguration.source === 'cloudflare-turn' ? 'INFO' : 'WARN',
+        nextPairCode
+      );
+
+      const peer = new RTCPeerConnection({ iceServers: turnIceConfiguration.iceServers });
       peerRef.current = peer;
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
       peer.onicecandidate = (event) => {
-        if (!event.candidate || !signalClientRef.current) return;
+        if (!event.candidate) {
+          reportSenderConnectionEvent(
+            'sender-ice-gathering-complete',
+            `Sender ICE gathering completed; ${describeSenderPeerState(peer)}`,
+            'INFO',
+            nextPairCode
+          );
+          return;
+        }
+        reportSenderConnectionEvent(
+          'sender-ice-generated',
+          `Generated local ICE candidate; ${describeIceCandidate(event.candidate)}; ${describeSenderPeerState(peer)}`,
+          'INFO',
+          nextPairCode
+        );
+        if (!signalClientRef.current) return;
         void signalClientRef.current.send({
           type: 'ice',
           from: 'sender',
@@ -585,8 +688,26 @@ export default function CameraSender() {
           ts: Date.now(),
           sessionId: senderSessionIdRef.current
         });
+        reportSenderConnectionEvent(
+          'sender-ice-dispatched',
+          `Dispatched local ICE candidate to host; ${describeIceCandidate(event.candidate)}; session=${senderSessionIdRef.current}; ${describeSenderPeerState(peer)}`,
+          'INFO',
+          nextPairCode
+        );
       };
       peer.onconnectionstatechange = () => {
+        reportSenderConnectionEvent(
+          'sender-connection-state',
+          `Sender peer connection state=${peer.connectionState}; ${describeSenderPeerState(peer)}`,
+          peer.connectionState === 'failed' ? 'WARN' : 'INFO',
+          nextPairCode
+        );
+        if (peer.connectionState === 'connected' || peer.connectionState === 'completed') {
+          void describeSelectedCandidatePair(peer).then((summary) => {
+            if (!summary) return;
+            reportSenderConnectionEvent('sender-selected-candidate-pair', `${summary}; ${describeSenderPeerState(peer)}`, 'INFO', nextPairCode);
+          });
+        }
         if (peer.connectionState === 'connected') {
           setIsConnected(true);
           isConnectedRef.current = true;
@@ -609,6 +730,28 @@ export default function CameraSender() {
             }, 1600);
           }
         }
+      };
+      peer.oniceconnectionstatechange = () => {
+        reportSenderConnectionEvent(
+          'sender-ice-connection-state',
+          `Sender ICE connection state=${peer.iceConnectionState}; ${describeSenderPeerState(peer)}`,
+          peer.iceConnectionState === 'failed' ? 'WARN' : 'INFO',
+          nextPairCode
+        );
+        if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
+          void describeSelectedCandidatePair(peer).then((summary) => {
+            if (!summary) return;
+            reportSenderConnectionEvent('sender-selected-candidate-pair', `${summary}; ${describeSenderPeerState(peer)}`, 'INFO', nextPairCode);
+          });
+        }
+      };
+      peer.onicegatheringstatechange = () => {
+        reportSenderConnectionEvent(
+          'sender-ice-gathering-state',
+          `Sender ICE gathering state=${peer.iceGatheringState}; ${describeSenderPeerState(peer)}`,
+          'INFO',
+          nextPairCode
+        );
       };
       peer.onnegotiationneeded = () => {
         // wait for host to send the offer; sender completes negotiation when it arrives
@@ -640,8 +783,15 @@ export default function CameraSender() {
       };
 
       await sendReadySignal(1);
+      reportSenderConnectionEvent('sender-ready', 'Sender ready signal sent and waiting for host offer.', 'INFO', nextPairCode);
       setStatus('Camera ready. Waiting for host offer...');
     } catch (err) {
+      reportSenderConnectionEvent(
+        'sender-connect-failed',
+        err instanceof Error ? err.message : 'Unable to start camera sender session.',
+        'ERROR',
+        nextPairCode
+      );
       setError(err instanceof Error ? err.message : 'Unable to start camera sender session.');
     } finally {
       setIsConnecting(false);

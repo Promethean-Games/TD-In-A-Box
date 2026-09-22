@@ -46,6 +46,8 @@ import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.RTCStats
+import org.webrtc.RTCStatsReport
 import org.webrtc.RendererCommon
 import org.webrtc.RtpSender
 import org.webrtc.SdpObserver
@@ -120,6 +122,7 @@ class CameraSenderService : Service() {
     private var videoSender: RtpSender? = null
     private var signalClient: NativePairSignalClient? = null
     private var notificationManager: NotificationManager? = null
+    private val turnIceService by lazy { TurnIceService() }
 
     override fun onCreate() {
         super.onCreate()
@@ -359,7 +362,8 @@ class CameraSenderService : Service() {
             stickySessionId = activeSessionId
             persistStickySession(pairCode, activeSessionId!!)
             val track = startLocalVideoCapture()
-            val rtcPeer = createPeerConnection()
+            val iceServers = resolveIceServers(pairCode)
+            val rtcPeer = createPeerConnection(iceServers)
             peerConnection = rtcPeer
             videoSender = rtcPeer.addTrack(track)
             attachTrackToPreviews(track)
@@ -557,8 +561,41 @@ class CameraSenderService : Service() {
         return enumerator.createCapturer(preferredDevice, null)
     }
 
-    private fun createPeerConnection(): PeerConnection {
-        val rtcConfig = PeerConnection.RTCConfiguration(buildIceServers())
+    private suspend fun resolveIceServers(pairCode: String): List<PeerConnection.IceServer> {
+        val legacyIceServers = buildLegacyIceServers()
+        return try {
+            val fetchedIceServers = withTimeout(8_000) {
+                turnIceService.fetchIceServers()
+            }
+            if (fetchedIceServers.isNullOrEmpty()) {
+                logConnectionReport(
+                    stage = "turn-ice-config-fallback",
+                    detail = "TURN credential fetch failed; using legacy fallback ICE servers.",
+                    severity = "WARN",
+                    pairCode = pairCode
+                )
+                legacyIceServers
+            } else {
+                logConnectionReport(
+                    stage = "turn-ice-config",
+                    detail = "Using temporary TURN ICE configuration from Supabase Edge Function; serverCount=${fetchedIceServers.size}.",
+                    pairCode = pairCode
+                )
+                fetchedIceServers
+            }
+        } catch (error: Throwable) {
+            logConnectionReport(
+                stage = "turn-ice-config-fallback",
+                detail = "TURN credential fetch failed; using legacy fallback ICE servers. ${error.message ?: "unknown error"}",
+                severity = "WARN",
+                pairCode = pairCode
+            )
+            legacyIceServers
+        }
+    }
+
+    private fun createPeerConnection(iceServers: List<PeerConnection.IceServer>): PeerConnection {
+        val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         val connection = peerConnectionFactory?.createPeerConnection(
             rtcConfig,
@@ -571,12 +608,12 @@ class CameraSenderService : Service() {
                             hasLoggedOutboundIce = true
                             logConnectionReport(
                                 stage = "sender-ice-generated",
-                                detail = "Local ICE candidates are being generated and sent; sequence=$localIceSequence; ${describePeerState(peerConnection)}."
+                                detail = "Local ICE candidates are being generated and sent; sequence=$localIceSequence; ${describeIceCandidate(candidate)}; ${describePeerState(peerConnection)}."
                             )
                         } else {
                             logConnectionReport(
                                 stage = "sender-ice-generated",
-                                detail = "Local ICE candidate #$localIceSequence generated; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(peerConnection)}."
+                                detail = "Local ICE candidate #$localIceSequence generated; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${describePeerState(peerConnection)}."
                             )
                         }
                         serviceScope.launch {
@@ -596,12 +633,12 @@ class CameraSenderService : Service() {
                                 )
                                 logConnectionReport(
                                     stage = "sender-ice-dispatched",
-                                    detail = "Local ICE candidate #$localIceSequence dispatched to host; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; session=${activeSessionId ?: "none"}; ${describePeerState(peerConnection)}."
+                                    detail = "Local ICE candidate #$localIceSequence dispatched to host; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; session=${activeSessionId ?: "none"}; ${describeIceCandidate(candidate)}; ${describePeerState(peerConnection)}."
                                 )
                             }.onFailure { error ->
                                 logConnectionReport(
                                     stage = "ice-send-failed",
-                                    detail = "Failed to send ICE candidate #$localIceSequence; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${error.message ?: "unknown error"}; ${describePeerState(peerConnection)}.",
+                                    detail = "Failed to send ICE candidate #$localIceSequence; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${error.message ?: "unknown error"}; ${describePeerState(peerConnection)}.",
                                     severity = "WARN",
                                     pairCode = activePairCode
                                 )
@@ -633,6 +670,7 @@ class CameraSenderService : Service() {
                                     stage = "peer-connected",
                                     detail = "WebRTC peer connection reached CONNECTED state."
                                 )
+                                logSelectedCandidatePair("selected-candidate-pair", newState.name.lowercase(), peerConnection)
                                 updateState(
                                     pairCode = activePairCode.orEmpty(),
                                     statusText = "Native stream live.",
@@ -667,6 +705,9 @@ class CameraSenderService : Service() {
                             detail = "ICE connection state changed to ${state.name.lowercase()}; ${describePeerState(peerConnection)}.",
                             severity = if (state == PeerConnection.IceConnectionState.FAILED) "WARN" else "INFO"
                         )
+                        if (state == PeerConnection.IceConnectionState.CONNECTED || state == PeerConnection.IceConnectionState.COMPLETED) {
+                            logSelectedCandidatePair("selected-candidate-pair", state.name.lowercase(), peerConnection)
+                        }
                         if (state == PeerConnection.IceConnectionState.FAILED && !manualDisconnect) {
                             scheduleReconnect("ICE ${state.name.lowercase()}.")
                         }
@@ -680,9 +721,25 @@ class CameraSenderService : Service() {
                     }
                 }
 
+                override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {
+                    runCatching {
+                        logConnectionReport(
+                            stage = "ice-gathering-state",
+                            detail = "ICE gathering state changed to ${newState.name.lowercase()}; ${describePeerState(peerConnection)}.",
+                            pairCode = activePairCode
+                        )
+                    }.onFailure { error ->
+                        logConnectionReport(
+                            stage = "ice-gathering-change-callback-crashed",
+                            detail = error.message ?: "Unhandled exception in ICE gathering change callback.",
+                            severity = "ERROR",
+                            pairCode = activePairCode
+                        )
+                    }
+                }
+
                 override fun onSignalingChange(newState: PeerConnection.SignalingState) = Unit
                 override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-                override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) = Unit
                 override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
                 override fun onAddStream(stream: org.webrtc.MediaStream) = Unit
                 override fun onRemoveStream(stream: org.webrtc.MediaStream) = Unit
@@ -932,21 +989,21 @@ class CameraSenderService : Service() {
                     if (rtcPeer.remoteDescription != null) {
                         logConnectionReport(
                             stage = "host-ice-apply-start",
-                            detail = "Applying host ICE candidate; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(rtcPeer)}.",
+                            detail = "Applying host ICE candidate; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${describePeerState(rtcPeer)}.",
                             pairCode = pairCode
                         )
                         runCatching { rtcPeer.addIceCandidate(candidate) }
                             .onSuccess {
                                 logConnectionReport(
                                     stage = "host-ice-applied",
-                                    detail = "Applied host ICE candidate; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(rtcPeer)}.",
+                                    detail = "Applied host ICE candidate; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${describePeerState(rtcPeer)}.",
                                     pairCode = pairCode
                                 )
                             }
                             .onFailure { error ->
                                 logConnectionReport(
                                     stage = "host-ice-apply-failed",
-                                    detail = "Failed to apply remote ICE candidate; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${error.message ?: "unknown error"}; ${describePeerState(rtcPeer)}.",
+                                    detail = "Failed to apply remote ICE candidate; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${error.message ?: "unknown error"}; ${describePeerState(rtcPeer)}.",
                                     severity = "WARN",
                                     pairCode = pairCode
                                 )
@@ -956,7 +1013,7 @@ class CameraSenderService : Service() {
                         pendingRemoteIce += candidate
                         logConnectionReport(
                             stage = "host-ice-queued",
-                            detail = "Queued host ICE candidate until remote description is set; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(rtcPeer)}.",
+                            detail = "Queued host ICE candidate until remote description is set; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${describePeerState(rtcPeer)}.",
                             pairCode = pairCode
                         )
                     }
@@ -995,7 +1052,7 @@ class CameraSenderService : Service() {
                 .onSuccess {
                     logConnectionReport(
                         stage = "pending-ice-applied",
-                        detail = "Applied queued remote ICE candidate #${index + 1}/${queued.size}; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describePeerState(connection)}.",
+                        detail = "Applied queued remote ICE candidate #${index + 1}/${queued.size}; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${describePeerState(connection)}.",
                         pairCode = activePairCode.orEmpty()
                     )
                 }
@@ -1003,7 +1060,7 @@ class CameraSenderService : Service() {
                     pendingRemoteIce += candidate
                     logConnectionReport(
                         stage = "pending-ice-requeue",
-                        detail = "Queued remote ICE candidate #${index + 1}/${queued.size} could not be applied; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${error.message ?: "unknown error"}; ${describePeerState(connection)}.",
+                        detail = "Queued remote ICE candidate #${index + 1}/${queued.size} could not be applied; mid=${candidate.sdpMid ?: "none"}; index=${candidate.sdpMLineIndex}; ${describeIceCandidate(candidate)}; ${error.message ?: "unknown error"}; ${describePeerState(connection)}.",
                         severity = "WARN",
                         pairCode = activePairCode.orEmpty()
                     )
@@ -1509,7 +1566,7 @@ class CameraSenderService : Service() {
         powerWakeLock = null
     }
 
-    private fun buildIceServers(): List<PeerConnection.IceServer> {
+    private fun buildLegacyIceServers(): List<PeerConnection.IceServer> {
         val servers = mutableListOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
@@ -1521,6 +1578,18 @@ class CameraSenderService : Service() {
                 .createIceServer()
         }
         return servers
+    }
+
+    private fun logSelectedCandidatePair(stage: String, connectionState: String, peer: PeerConnection?) {
+        val currentPeer = peer ?: return
+        currentPeer.getStats { report ->
+            val summary = summarizeSelectedCandidatePair(report) ?: return@getStats
+            logConnectionReport(
+                stage = stage,
+                detail = "Selected candidate pair observed after $connectionState; $summary; ${describePeerState(currentPeer)}.",
+                pairCode = activePairCode
+            )
+        }
     }
 
     private fun updateState(
@@ -1768,6 +1837,59 @@ private fun JsonObject.toIceCandidate(): IceCandidate? {
     val sdpMid = this["sdpMid"]?.takeUnless { it is JsonNull }?.jsonPrimitive?.content
     val sdpMLineIndex = this["sdpMLineIndex"]?.jsonPrimitive?.int ?: return null
     return IceCandidate(sdpMid, sdpMLineIndex, candidate)
+}
+
+private fun candidateType(candidateSdp: String?): String {
+    val match = Regex("\\btyp\\s+([a-z0-9]+)", RegexOption.IGNORE_CASE).find(candidateSdp.orEmpty())
+    return match?.groupValues?.getOrNull(1)?.lowercase() ?: "unknown"
+}
+
+private fun candidateProtocol(candidateSdp: String?): String {
+    val match = Regex("^candidate:[^\\s]+\\s+\\d+\\s+([a-z0-9]+)", RegexOption.IGNORE_CASE).find(candidateSdp.orEmpty())
+    return match?.groupValues?.getOrNull(1)?.lowercase() ?: "unknown"
+}
+
+private fun describeIceCandidate(candidate: IceCandidate): String {
+    val type = candidateType(candidate.sdp)
+    val protocol = candidateProtocol(candidate.sdp)
+    return "candidateType=$type; protocol=$protocol; relay=${type == "relay"}"
+}
+
+private fun selectedCandidateType(report: RTCStats?): String {
+    val value = report?.members?.get("candidateType")
+    return value as? String ?: "unknown"
+}
+
+private fun selectedCandidateProtocol(report: RTCStats?): String {
+    val value = report?.members?.get("protocol")
+    return value as? String ?: "unknown"
+}
+
+private fun summarizeSelectedCandidatePair(report: RTCStatsReport): String? {
+    val stats = report.statsMap
+    val transport = stats.values.firstOrNull { stat ->
+        stat.type == "transport" && stat.members["selectedCandidatePairId"] is String
+    }
+    val selectedPairId = transport?.members?.get("selectedCandidatePairId") as? String
+        ?: stats.values.firstOrNull { stat ->
+            stat.type == "candidate-pair" &&
+                stat.members["state"] == "succeeded" &&
+                stat.members["nominated"] == true
+        }?.id
+        ?: return null
+
+    val candidatePair = stats[selectedPairId] ?: return null
+    val localCandidateId = candidatePair.members["localCandidateId"] as? String
+    val remoteCandidateId = candidatePair.members["remoteCandidateId"] as? String
+    val localCandidate = localCandidateId?.let { stats[it] }
+    val remoteCandidate = remoteCandidateId?.let { stats[it] }
+    val localType = selectedCandidateType(localCandidate)
+    val remoteType = selectedCandidateType(remoteCandidate)
+    val protocol = selectedCandidateProtocol(localCandidate)
+    val pairState = candidatePair.members["state"] as? String ?: "unknown"
+    val relaySelected = localType == "relay" || remoteType == "relay"
+
+    return "selectedPair local=$localType; remote=$remoteType; protocol=$protocol; state=$pairState; relay=$relaySelected"
 }
 
 private fun describePeerState(peer: PeerConnection?): String {
