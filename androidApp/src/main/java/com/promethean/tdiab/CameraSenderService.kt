@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -1025,7 +1026,7 @@ class CameraSenderService : Service() {
                     severity = severity,
                     pairCode = pairCode
                 )
-                serviceScope.launch(Dispatchers.IO) {
+                serviceScope.launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
                     try {
                         sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
                     } catch (error: Throwable) {
