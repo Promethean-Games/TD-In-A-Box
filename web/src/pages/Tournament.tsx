@@ -209,6 +209,7 @@ export default function Tournament() {
   const offerResendLoopRef = useRef<number | null>(null);
   const offerResendAttemptRef = useRef(0);
   const senderReadySeenRef = useRef(false);
+  const senderAnswerSeenRef = useRef(false);
   const hostIceSentLoggedRef = useRef(false);
   const senderIceReceivedLoggedRef = useRef(false);
   const liveRelayRef = useRef<HostChannelRelay | null>(null);
@@ -1427,6 +1428,7 @@ export default function Tournament() {
     hostPreviewAttachSequenceRef.current = 0;
     offerResendAttemptRef.current = 0;
     senderReadySeenRef.current = false;
+    senderAnswerSeenRef.current = false;
     offerInFlightRef.current = false;
     hostIceSentLoggedRef.current = false;
     senderIceReceivedLoggedRef.current = false;
@@ -1457,6 +1459,7 @@ export default function Tournament() {
     hostPreviewAttachSequenceRef.current = 0;
     offerResendAttemptRef.current = 0;
     senderReadySeenRef.current = false;
+    senderAnswerSeenRef.current = false;
     hostIceSentLoggedRef.current = false;
     senderIceReceivedLoggedRef.current = false;
     reportHostConnectionEvent('pair-code-generated', 'Host generated new pair code.', 'INFO', nextPairCode);
@@ -1602,7 +1605,7 @@ export default function Tournament() {
     }
     offerTimeoutRef.current = window.setTimeout(() => {
       const activePeer = pairPeerRef.current;
-      if (!activePeer || activePeer.connectionState === 'connected' || activePeer.remoteDescription) {
+      if (!activePeer || activePeer.connectionState === 'connected' || activePeer.remoteDescription || senderAnswerSeenRef.current) {
         return;
       }
       const senderReadySeen = senderReadySeenRef.current;
@@ -1636,7 +1639,7 @@ export default function Tournament() {
     const peer = pairPeerRef.current;
     const signalClient = pairSignalClientRef.current;
     if (!peer || !signalClient) return false;
-    if (peer.connectionState === 'connected' || peer.remoteDescription) return false;
+    if (peer.connectionState === 'connected' || peer.remoteDescription || senderAnswerSeenRef.current) return false;
 
     let createdFreshOffer = false;
     try {
@@ -1662,6 +1665,10 @@ export default function Tournament() {
           'INFO',
           pairCode
         );
+      }
+
+      if (senderAnswerSeenRef.current || peer.connectionState === 'connected' || peer.remoteDescription) {
+        return false;
       }
 
       reportHostConnectionEvent(
@@ -1698,6 +1705,10 @@ export default function Tournament() {
       const peer = pairPeerRef.current;
       const signalClient = pairSignalClientRef.current;
       if (!peer || !signalClient || peer.connectionState === 'connected' || peer.remoteDescription) {
+        stopOfferResendLoop();
+        return;
+      }
+      if (senderAnswerSeenRef.current) {
         stopOfferResendLoop();
         return;
       }
@@ -1819,6 +1830,7 @@ export default function Tournament() {
         const alreadyReady = senderReadySeenRef.current;
         senderReadySeenRef.current = true;
         if (peer.connectionState === 'connected' || peer.remoteDescription) {
+          senderAnswerSeenRef.current = true;
           reportHostConnectionEvent(
             'sender-ready-ignored-linked',
             `Sender ready received but host is already linked to this session. Continuing active connection; ${describeHostPeerState(peer)}`,
@@ -1851,6 +1863,7 @@ export default function Tournament() {
         return;
       }
       if (message.type === 'answer' && message.payload) {
+        senderAnswerSeenRef.current = true;
         if (message.sessionId && activeSenderSessionIdRef.current && message.sessionId !== activeSenderSessionIdRef.current) {
           reportHostConnectionEvent(
             'answer-session-stale',
