@@ -28,6 +28,7 @@ import {
   formatApplicationReportTimestamp,
   getApplicationReportInstanceKey,
   getApplicationReportInstanceLabel,
+  readCachedApplicationReports,
   listApplicationReports,
   type ApplicationReport
 } from '@/lib/applicationReports';
@@ -230,6 +231,15 @@ export default function AdminConsole() {
       setApplicationReports(reports);
       setApplicationReportsStatus(reports.length > 0 ? `Loaded ${reports.length} report${reports.length === 1 ? '' : 's'}.` : 'No crash reports yet.');
     } catch (error) {
+      const cachedReports = readCachedApplicationReports();
+      if (cachedReports.length > 0) {
+        setApplicationReports(cachedReports);
+        setApplicationReportsStatus(
+          `${error instanceof Error ? error.message : 'Unable to load crash reports.'} Showing ${cachedReports.length} cached report${cachedReports.length === 1 ? '' : 's'} instead.`
+        );
+        return;
+      }
+
       setApplicationReports([]);
       setApplicationReportsStatus(error instanceof Error ? error.message : 'Unable to load crash reports.');
     }
