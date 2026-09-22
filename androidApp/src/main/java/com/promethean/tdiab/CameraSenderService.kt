@@ -1038,6 +1038,27 @@ class CameraSenderService : Service() {
                     detail = "Calling PeerConnection.setLocalDescription with the created local answer.",
                     pairCode = pairCode
                 )
+                serviceScope.launch(Dispatchers.IO) {
+                    delay(2_500)
+                    if (!answerDispatched.get()) {
+                        val detail = "Timed out waiting for local-description callback."
+                        logConnectionReport(
+                            stage = "local-description-timeout-fallback",
+                            detail = "Proceeding with answer dispatch despite callback timeout.",
+                            severity = "WARN",
+                            pairCode = pairCode
+                        )
+                        runCatching {
+                            sendSenderErrorSignal(
+                                signalClient = signalClient,
+                                pairCode = pairCode,
+                                stage = "local-description-timeout-fallback",
+                                detail = detail
+                            )
+                        }
+                        dispatchAnswer("local-description-timeout", detail, "WARN")
+                    }
+                }
                 rtcPeer.setLocalDescription(
                     object : SdpObserver {
                         override fun onCreateSuccess(sessionDescription: SessionDescription?) = Unit
@@ -1085,27 +1106,6 @@ class CameraSenderService : Service() {
                     },
                     answer
                 )
-                serviceScope.launch(Dispatchers.IO) {
-                    delay(2_500)
-                    if (!answerDispatched.get()) {
-                        val detail = "Timed out waiting for local-description callback."
-                        logConnectionReport(
-                            stage = "local-description-timeout-fallback",
-                            detail = "Proceeding with answer dispatch despite callback timeout.",
-                            severity = "WARN",
-                            pairCode = pairCode
-                        )
-                        runCatching {
-                            sendSenderErrorSignal(
-                                signalClient = signalClient,
-                                pairCode = pairCode,
-                                stage = "local-description-timeout-fallback",
-                                detail = detail
-                            )
-                        }
-                        dispatchAnswer("local-description-timeout", detail, "WARN")
-                    }
-                }
             } catch (error: Throwable) {
                 val failureDetail = error.message ?: "PeerConnection.setLocalDescription reported failure."
                 logConnectionReport(
