@@ -93,6 +93,7 @@ class CameraSenderService : Service() {
     private var readyAnnouncementJob: Job? = null
     private var offerTimeoutJob: Job? = null
     private var postOfferConnectionTimeoutJob: Job? = null
+    private val answerDispatchGuard = AtomicBoolean(false)
     private var hasReceivedHostOffer = false
     private var hasLoggedInboundIce = false
     private var hasLoggedOutboundIce = false
@@ -1007,21 +1008,29 @@ class CameraSenderService : Service() {
         pairCode: String
     ) {
         serviceScope.launch(Dispatchers.IO) {
-            val answerDispatched = AtomicBoolean(false)
+            val answerDispatched = answerDispatchGuard
             fun dispatchAnswer(trigger: String, detail: String? = null, severity: String = "INFO") {
-                if (!answerDispatched.compareAndSet(false, true)) return
-                if (detail != null) {
+                if (!answerDispatched.compareAndSet(false, true)) {
                     logConnectionReport(
-                        stage = "answer-dispatch-fallback",
-                        detail = "Dispatching answer via $trigger; $detail",
-                        severity = severity,
+                        stage = "answer-dispatch-skipped",
+                        detail = "Ignoring duplicate answer dispatch trigger $trigger; answer send is already in-flight.",
+                        severity = "INFO",
                         pairCode = pairCode
                     )
+                    return
                 }
+                val dispatchDetail = if (detail == null) "Dispatching answer via $trigger." else "Dispatching answer via $trigger; $detail"
+                logConnectionReport(
+                    stage = "answer-dispatch-triggered",
+                    detail = dispatchDetail,
+                    severity = severity,
+                    pairCode = pairCode
+                )
                 serviceScope.launch(Dispatchers.IO) {
                     runCatching {
                         sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
                     }.onFailure { error ->
+                        answerDispatched.set(false)
                         logConnectionReport(
                             stage = "answer-dispatch-failed",
                             detail = error.message ?: "Answer dispatch failed after $trigger.",
@@ -1077,7 +1086,9 @@ class CameraSenderService : Service() {
                                 detail = "Local answer applied successfully.",
                                 pairCode = pairCode
                             )
-                            dispatchAnswer("local-description-callback-success")
+                            if (!answerDispatched.get()) {
+                                dispatchAnswer("local-description-callback-success")
+                            }
                         }
 
                         override fun onSetFailure(error: String?) {
@@ -1099,7 +1110,9 @@ class CameraSenderService : Service() {
                                     )
                                 }
                             }
-                            dispatchAnswer("local-description-callback-failure", failureDetail, "WARN")
+                            if (!answerDispatched.get()) {
+                                dispatchAnswer("local-description-callback-failure", failureDetail, "WARN")
+                            }
                         }
 
                         override fun onCreateFailure(error: String?) = Unit
@@ -1123,7 +1136,9 @@ class CameraSenderService : Service() {
                         severity = "ERROR"
                     )
                 }
-                dispatchAnswer("local-description-throw", failureDetail, "WARN")
+                if (!answerDispatched.get()) {
+                    dispatchAnswer("local-description-throw", failureDetail, "WARN")
+                }
             }
         }
     }
@@ -1170,6 +1185,11 @@ class CameraSenderService : Service() {
 
         try {
             withTimeout(6_000) {
+                logConnectionReport(
+                    stage = "answer-send-transport-call",
+                    detail = "Calling transportClient.send(answerMessage) for session=${answerMessage.sessionId ?: "none"}; payloadType=${answerMessage.type}; ${describePeerState(rtcPeer)}.",
+                    pairCode = pairCode
+                )
                 transportClient.send(answerMessage)
             }
             logConnectionReport(
@@ -1213,6 +1233,8 @@ class CameraSenderService : Service() {
             if (!manualDisconnect) {
                 scheduleReconnect("Failed to send answer payload.")
             }
+        } finally {
+            answerDispatchGuard.set(false)
         }
     }
 
@@ -1421,6 +1443,7 @@ class CameraSenderService : Service() {
                 )
             }
         }
+        answerDispatchGuard.set(false)
         runCatching { currentSignalClient?.close() }
         runCatching { activePeerConnection?.dispose() }
     }
