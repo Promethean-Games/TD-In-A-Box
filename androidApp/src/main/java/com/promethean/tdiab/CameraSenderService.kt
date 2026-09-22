@@ -1012,18 +1012,41 @@ class CameraSenderService : Service() {
                     detail = "Calling PeerConnection.setLocalDescription with the created local answer.",
                     pairCode = pairCode
                 )
-                rtcPeer.setLocalDescriptionAwait(answer)
-                logConnectionReport(
-                    stage = "local-description-callback-success",
-                    detail = "PeerConnection.setLocalDescription reported success.",
-                    pairCode = pairCode
-                )
-                runCatching { drainPendingIce(rtcPeer) }
-                logConnectionReport(
-                    stage = "local-description-set",
-                    detail = "Local answer applied successfully.",
-                    pairCode = pairCode
-                )
+                val localDescriptionApplied = runCatching {
+                    withTimeout(2_500) {
+                        rtcPeer.setLocalDescriptionAwait(answer)
+                    }
+                }
+                if (localDescriptionApplied.isSuccess) {
+                    logConnectionReport(
+                        stage = "local-description-callback-success",
+                        detail = "PeerConnection.setLocalDescription reported success.",
+                        pairCode = pairCode
+                    )
+                    runCatching { drainPendingIce(rtcPeer) }
+                    logConnectionReport(
+                        stage = "local-description-set",
+                        detail = "Local answer applied successfully.",
+                        pairCode = pairCode
+                    )
+                } else {
+                    val detail = localDescriptionApplied.exceptionOrNull()?.message
+                        ?: "Timed out waiting for local description callback."
+                    logConnectionReport(
+                        stage = "local-description-timeout-fallback",
+                        detail = "Proceeding with answer dispatch despite local description wait failure: $detail",
+                        severity = "WARN",
+                        pairCode = pairCode
+                    )
+                    runCatching {
+                        sendSenderErrorSignal(
+                            signalClient = signalClient,
+                            pairCode = pairCode,
+                            stage = "local-description-timeout-fallback",
+                            detail = detail
+                        )
+                    }
+                }
                 sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
             } catch (error: Throwable) {
                 val failureDetail = error.message ?: "PeerConnection.setLocalDescription reported failure."
