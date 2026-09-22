@@ -1020,13 +1020,6 @@ class CameraSenderService : Service() {
                 }
                 serviceScope.launch(Dispatchers.IO) {
                     runCatching {
-                        sendSenderErrorSignal(
-                            signalClient = signalClient,
-                            pairCode = pairCode,
-                            stage = "answer-dispatch-attempt",
-                            detail = "Attempting answer dispatch via $trigger.",
-                            severity = "INFO"
-                        )
                         sendAnswerToHost(rtcPeer, signalClient, answerMessage, pairCode)
                     }.onFailure { error ->
                         logConnectionReport(
@@ -1044,10 +1037,6 @@ class CameraSenderService : Service() {
                     stage = "local-description-native-call-start",
                     detail = "Calling PeerConnection.setLocalDescription with the created local answer.",
                     pairCode = pairCode
-                )
-                dispatchAnswer(
-                    trigger = "pre-local-description",
-                    detail = "Dispatching local answer before setLocalDescription to avoid callback deadlock."
                 )
                 serviceScope.launch(Dispatchers.IO) {
                     delay(2_500)
